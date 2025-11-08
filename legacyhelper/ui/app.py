@@ -187,8 +187,9 @@ class LegacyHelperApp(App[None]):
         if self.agent:
             try:
                 # Run the synchronous get_response in a thread pool
+                # This includes shell history context automatically
                 response = await asyncio.to_thread(
-                    self.agent.model.get_response,
+                    self.agent.get_response,
                     user_input
                 )
 

@@ -1,6 +1,7 @@
 from typing import Optional
 from legacyhelper.model.gemini import GeminiModel
 from legacyhelper.model.base import BaseModel
+from legacyhelper.core.history_reader import read_recent_history, format_history_context
 from rich.console import Console
 from rich.prompt import Prompt
 
@@ -18,6 +19,34 @@ class Agent:
         self.console = Console()
         self.conversation_history: list[dict[str, str]] = []
 
+    def _build_prompt_with_history(self, prompt: str) -> str:
+        """Build a prompt with shell history context.
+
+        Args:
+            prompt: The user's original prompt
+
+        Returns:
+            Prompt with history context prepended
+        """
+        history = read_recent_history(count=10)
+        if not history:
+            return prompt
+        
+        history_context = format_history_context(history)
+        return f"{history_context}\n\nUser question: {prompt}"
+
+    def get_response(self, prompt: str) -> str:
+        """Get a response from the agent with history context.
+
+        Args:
+            prompt: The user's prompt
+
+        Returns:
+            The agent's response
+        """
+        enhanced_prompt = self._build_prompt_with_history(prompt)
+        return self.model.get_response(enhanced_prompt)
+
     def run(self, prompt: str) -> str:
         """Run the agent with a prompt (legacy CLI mode).
 
@@ -27,7 +56,7 @@ class Agent:
         Returns:
             The agent's response
         """
-        response = self.model.get_response(prompt)
+        response = self.get_response(prompt)
 
         # For now, we'll just present the response as a choice.
         # In the future, we will parse the response to extract commands.
