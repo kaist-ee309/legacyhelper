@@ -6,6 +6,7 @@ from textual.containers import Container, ScrollableContainer
 from textual.widgets import Header, Footer, Input
 from textual.binding import Binding
 from textual.reactive import reactive
+from pydantic_ai import Agent
 
 from legacyhelper.ui.widgets import (
     MessageWidget,
@@ -13,8 +14,6 @@ from legacyhelper.ui.widgets import (
     CommandOutputWidget,
     StatusBarWidget
 )
-from legacyhelper.core.command_parser import CommandParser, ParsedCommand
-from legacyhelper.core.executor import CommandExecutor, InteractiveExecutor
 
 
 class ConversationPanel(ScrollableContainer):
@@ -39,7 +38,7 @@ class ConversationPanel(ScrollableContainer):
         self.mount(message)
         self.scroll_end(animate=True)
 
-    def add_command_preview(self, parsed_cmd: ParsedCommand) -> CommandPreviewWidget:
+    def add_command_preview(self, parsed_cmd) -> CommandPreviewWidget:
         """Add a command preview widget.
 
         Args:
@@ -117,9 +116,9 @@ class LegacyHelperApp(App[None]):
     TITLE = "LegacyHelper - AI Troubleshooting Assistant"
     SUB_TITLE = "Legacy System Troubleshooting"
 
-    current_command: reactive[Optional[ParsedCommand]] = reactive(None)
+    current_command: reactive = reactive(None)
 
-    def __init__(self, agent=None, **kwargs) -> None:
+    def __init__(self, agent:Agent=None, **kwargs) -> None:
         """Initialize the app.
 
         Args:
@@ -127,13 +126,9 @@ class LegacyHelperApp(App[None]):
         """
         super().__init__(**kwargs)
         self.agent = agent
+        self.message_history = None
         self.conversation_panel: Optional[ConversationPanel] = None
         self.status_bar: Optional[StatusBarWidget] = None
-
-        # Initialize command parser and executor
-        self.command_parser = CommandParser()
-        self.command_executor = CommandExecutor(timeout=30)
-        self.interactive_executor = InteractiveExecutor(self.command_executor)
 
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
@@ -186,34 +181,17 @@ class LegacyHelperApp(App[None]):
         # Get response from agent
         if self.agent:
             try:
-                # Run the synchronous get_response in a thread pool
-                # This includes shell history context automatically
-                response = await asyncio.to_thread(
-                    self.agent.get_response,
-                    user_input
-                )
+                result = await self.agent.run(user_input, 
+                                              message_history=self.message_history)
+                response = str(result.output)
+                self.message_history = result.all_messages()
 
                 # Remove "thinking" message
                 if self.conversation_panel:
                     messages = list(self.conversation_panel.query("MessageWidget"))
                     if messages and "Thinking" in str(messages[-1].content):
                         await messages[-1].remove()
-
-                    # Add agent response
                     self.conversation_panel.add_message("assistant", response)
-
-                    # Parse and extract commands
-                    parsed_cmd = self.command_parser.get_best_command(response)
-                    if parsed_cmd and parsed_cmd.confidence > 0.5:
-                        self.current_command = parsed_cmd
-                        self.conversation_panel.add_command_preview(parsed_cmd)
-                    else:
-                        # Check if response seems complete
-                        if len(response) < 50:
-                            self.conversation_panel.add_message(
-                                "system",
-                                "💡 Tip: Ask me for specific troubleshooting steps or system commands."
-                            )
 
                 # Update status
                 if self.status_bar:

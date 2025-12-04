@@ -2,9 +2,10 @@
 import os
 import sys
 import argparse
-from legacyhelper.core.agent import Agent
+from pydantic_ai import Agent, models
 from legacyhelper.ui.app import LegacyHelperApp
 from legacyhelper.model.factory import ModelFactory
+from legacyhelper.tools.command_tool import bash_tool, Exec_Deps
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,15 +94,16 @@ def main() -> None:
             # User specified a provider
             model_kwargs = {"temperature": args.temperature}
             if args.model:
-                model_kwargs["model"] = args.model
+                model_kwargs["model_name"] = args.model
 
             model = ModelFactory.create(args.provider, **model_kwargs)
             provider_name = args.provider
+
         else:
             # Auto-detect from environment
             model_kwargs = {"temperature": args.temperature}
             if args.model:
-                model_kwargs["model"] = args.model
+                model_kwargs["model_name"] = args.model
 
             model = ModelFactory.create_from_env(**model_kwargs)
 
@@ -125,17 +127,9 @@ def main() -> None:
         sys.exit(1)
 
     # Initialize agent with the model
-    agent = Agent(model=model)
-
-    # Launch appropriate interface
-    if args.cli:
-        # Legacy CLI mode
-        response = agent.run("Suggest a command to check the disk space on a Linux system.")
-        print(f"\nResponse: {response}")
-    else:
-        # Launch TUI
-        app = LegacyHelperApp(agent=agent)
-        app.run()
+    agent = Agent(model=model, tools=[bash_tool])
+    app = LegacyHelperApp(agent=agent)
+    app.run()
 
 
 if __name__ == "__main__":
