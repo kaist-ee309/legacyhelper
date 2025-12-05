@@ -5,8 +5,7 @@ import argparse
 from pydantic_ai import Agent, models
 from legacyhelper.ui.app import LegacyHelperApp
 from legacyhelper.model.factory import ModelFactory
-from legacyhelper.tools.command_tool import bash_tool, Exec_Deps
-
+from legacyhelper.tools.command_tool import bash_tool, Exec_Deps, SYSTEM_LOG_TOOLSET
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments.
@@ -127,7 +126,7 @@ def main() -> None:
         sys.exit(1)
 
     # Initialize agent with the model
-    agent = Agent(model=model, tools=[bash_tool])
+    agent = Agent(model=model, tools=[bash_tool], toolsets=[SYSTEM_LOG_TOOLSET])
     app = LegacyHelperApp(agent=agent)
     app.run()
 
