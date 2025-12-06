@@ -1,10 +1,13 @@
 """Model factory for creating different LLM instances."""
 import os
 from typing import Optional, Dict, Any
-from legacyhelper.model.base import BaseModel
-from legacyhelper.model.gemini import GeminiModel
-from legacyhelper.model.openai import OpenAIModel
-from legacyhelper.model.claude import ClaudeModel
+from pydantic_ai.models import Model
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.providers.google import GoogleProvider
 
 
 class ModelFactory:
@@ -12,16 +15,21 @@ class ModelFactory:
 
     # Map of model provider names to their classes
     MODELS = {
-        "gemini": GeminiModel,
-        "openai": OpenAIModel,
-        "claude": ClaudeModel,
+        "gemini": GoogleModel,
+        "openai": OpenAIChatModel,
+        "claude": AnthropicModel,
     }
-
+    # Map of Provider class to instantiate provider with api key.
+    PROVIDER = {
+        "gemini": GoogleProvider, 
+        "openai": OpenAIProvider, 
+        "claude": AnthropicProvider, 
+    }
     # Default models for each provider
     DEFAULT_MODELS = {
-        "gemini": "gemini-2.0-flash-exp",
+        "gemini": "gemini-2.5-flash",
         "openai": "gpt-4o",
-        "claude": "claude-3-5-sonnet-20241022",
+        "claude": "claude-haiku-4-5",
     }
 
     # Environment variable names for API keys
@@ -38,7 +46,7 @@ class ModelFactory:
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         **kwargs: Any
-    ) -> BaseModel:
+    ) -> Model:
         """Create a model instance.
 
         Args:
@@ -74,6 +82,7 @@ class ModelFactory:
 
         # Get the model class
         model_class = cls.MODELS[provider]
+        provider_class = cls.PROVIDER[provider]
 
         # Use default model if not specified
         if model is None:
@@ -83,15 +92,11 @@ class ModelFactory:
         model_kwargs: Dict[str, Any] = {"api_key": api_key, **kwargs}
 
         # Add model parameter for providers that support it
-        if provider in ["openai", "claude"]:
-            model_kwargs["model"] = model
-        # Gemini uses the model parameter differently in its constructor
-        # so we don't pass it the same way
-
-        return model_class(**model_kwargs)
+        provider = provider_class(api_key=model_kwargs['api_key'])
+        return model_class(model, provider=provider)
 
     @classmethod
-    def create_from_env(cls, **kwargs: Any) -> BaseModel:
+    def create_from_env(cls, **kwargs: Any) -> Model:
         """Create a model from environment variables.
 
         Checks for API keys in this order:
