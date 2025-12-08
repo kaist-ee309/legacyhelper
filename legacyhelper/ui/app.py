@@ -146,7 +146,8 @@ class LegacyHelperApp(App[None]):
         if self.conversation_panel:
             self.conversation_panel.add_message(
                 "system",
-                "Welcome to LegacyHelper! Ask me anything about troubleshooting your Linux/UNIX system."
+                "Welcome to LegacyHelper! Ask me anything about "
+                "troubleshooting your Linux/UNIX system."
             )
 
         # Focus the input field
@@ -181,7 +182,7 @@ class LegacyHelperApp(App[None]):
         # Get response from agent
         if self.agent:
             try:
-                result = await self.agent.run(user_input, 
+                result = await self.agent.run(user_input,
                                               message_history=self.message_history)
                 response = str(result.output)
                 self.message_history = result.all_messages()
@@ -318,7 +319,3 @@ class LegacyHelperApp(App[None]):
 
         if self.status_bar:
             self.status_bar.set_status("ready")
-
-    def action_quit(self) -> None:
-        """Quit the application."""
-        self.exit()
