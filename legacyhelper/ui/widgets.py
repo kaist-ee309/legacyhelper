@@ -266,7 +266,7 @@ class StatusBarWidget(Static):
         status_text = self.status.capitalize()
 
         self.update(
-            f"[b]{self.model_name}[/b] [{status_class}] \
-            {status_icon} {status_text}[/{status_class}] | "
+            f"[b]{self.model_name}[/b] [{status_class}]"
+            f" {status_icon} {status_text}[/{status_class}] | "
             f"[dim]Ctrl+C: Quit | Ctrl+L: Clear[/dim]"
         )
