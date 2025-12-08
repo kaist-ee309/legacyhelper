@@ -1,18 +1,21 @@
+"""Command tool for running bash commands and retrieving system logs."""
+import os
+import re
+import subprocess
+from pathlib import Path
+
 from pydantic import BaseModel
 from pydantic_ai import RunContext, Tool, Agent
 from pydantic_ai import FunctionToolset
-import subprocess
-
-import os
-import re
-from pathlib import Path
 
 class BashResult(BaseModel):
+    """Contains the result of a bash command execution."""
     stdout: str
     stderr: str
     returncode: int
 
-class Exec_Deps(BaseModel):
+class ExecDeps(BaseModel):
+    """Contains the dependencies for executing a command."""
     workdir: str
 
 def bash_tool(command: str) -> BashResult:
@@ -52,7 +55,9 @@ def get_current_system_log() -> str:
     Get the system log for the current boot.
     Call when "error" level system log is needed.
     """
-    return subprocess.run(["journalctl", "-p", "3", "-xb", "--no-pager"], capture_output=True, text=True).stdout
+    command = ["journalctl", "-p", "3", "-xb", "--no-pager"]
+    result = subprocess.run(command, capture_output=True, text=True, check=True)
+    return result.stdout
 
 @system_log_toolset.tool
 def get_previous_system_log() -> str:
@@ -60,7 +65,9 @@ def get_previous_system_log() -> str:
     Get the system log for the previous boot. 
     Call when system log for previous boot is required or booting related problem.
     """
-    return subprocess.run(["journalctl", "-p", "3", "-xb", "-1", "--no-pager"], capture_output=True, text=True).stdout
+    command = ["journalctl", "-p", "3", "-xb", "-1", "--no-pager"]
+    result = subprocess.run(command, capture_output=True, text=True, check=True)
+    return result.stdout
 
 @system_log_toolset.tool
 def get_filtered_shell_history(ctx: RunContext[None], n: int = 10) -> str:
@@ -75,7 +82,7 @@ def get_filtered_shell_history(ctx: RunContext[None], n: int = 10) -> str:
     home = Path.home()
     shell = os.environ.get("SHELL", "")
     history_path = None
-    
+ 
     # Prioritize shell specific history, fall back to existence check
     candidates = []
     if "zsh" in shell:

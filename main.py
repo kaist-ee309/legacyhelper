@@ -5,7 +5,7 @@ import argparse
 from pydantic_ai import Agent, models
 from legacyhelper.ui.app import LegacyHelperApp
 from legacyhelper.model.factory import ModelFactory
-from legacyhelper.tools.command_tool import bash_tool, Exec_Deps, SYSTEM_LOG_TOOLSET
+from legacyhelper.tools.command_tool import bash_tool, ExecDeps, SYSTEM_LOG_TOOLSET
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments.

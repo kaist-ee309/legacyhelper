@@ -182,7 +182,7 @@ class LegacyHelperApp(App[None]):
         # Get response from agent
         if self.agent:
             try:
-                result = await self.agent.run(user_input, 
+                result = await self.agent.run(user_input,
                                               message_history=self.message_history)
                 response = str(result.output)
                 self.message_history = result.all_messages()
