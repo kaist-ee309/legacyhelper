@@ -1,7 +1,6 @@
 """Custom widgets for LegacyHelper TUI."""
-from typing import Optional
 from textual.widgets import Static, Button, Label
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal
 from textual.app import ComposeResult
 from rich.syntax import Syntax
 from rich.markdown import Markdown
@@ -267,6 +266,7 @@ class StatusBarWidget(Static):
         status_text = self.status.capitalize()
 
         self.update(
-            f"[b]{self.model_name}[/b] [{status_class}]{status_icon} {status_text}[/{status_class}] | "
+            f"[b]{self.model_name}[/b] [{status_class}] \
+            {status_icon} {status_text}[/{status_class}] | "
             f"[dim]Ctrl+C: Quit | Ctrl+L: Clear[/dim]"
         )
