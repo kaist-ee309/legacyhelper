@@ -1,11 +1,12 @@
 """Main Textual application for LegacyHelper."""
 import asyncio
-from typing import Optional
+from typing import Optional, List
 from textual.app import App, ComposeResult
 from textual.containers import Container, ScrollableContainer
 from textual.widgets import Header, Footer, Input
 from textual.binding import Binding
 from textual.reactive import reactive
+from textual import events
 from pydantic_ai import Agent
 
 from legacyhelper.ui.widgets import (
@@ -14,6 +15,91 @@ from legacyhelper.ui.widgets import (
     CommandOutputWidget,
     StatusBarWidget
 )
+
+
+class HistoryInput(Input):
+    """Input widget with command history navigation using up/down arrows."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        """Initialize input with history support."""
+        super().__init__(*args, **kwargs)
+        self.history: List[str] = []
+        # 0 = current input, 1 = most recent, 2 = second most recent, etc.
+        self.history_pos: int = 0
+        self.current_input: str = ""
+
+    def add_to_history(self, text: str) -> None:
+        """Add a command to history.
+
+        Args:
+            text: The text to add to history
+        """
+        if text and (not self.history or self.history[-1] != text):
+            self.history.append(text)
+        self.history_pos = 0
+        self.current_input = ""
+
+    def on_key(self, event: events.Key) -> None:
+        """Handle key events for history navigation.
+
+        Args:
+            event: The key event
+        """
+        if event.key == "up":
+            event.prevent_default()
+            self._navigate_up()
+        elif event.key == "down":
+            event.prevent_default()
+            self._navigate_down()
+
+    def _navigate_up(self) -> None:
+        """Go to older (previous) history entry."""
+        if not self.history:
+            return
+
+        # Save current input when starting navigation
+        if self.history_pos == 0:
+            self.current_input = self.value
+
+        # If at overflow, wrap back to most recent
+        if self.history_pos > len(self.history):
+            self.history_pos = 1
+            self.value = self.history[-self.history_pos]
+            self.cursor_position = len(self.value)
+        elif self.history_pos < len(self.history):
+            self.history_pos += 1
+            # Get item from end of list (most recent first)
+            self.value = self.history[-self.history_pos]
+            self.cursor_position = len(self.value)
+        else:
+            # At oldest - go to empty (overflow)
+            self.history_pos = len(self.history) + 1
+            self.value = ""
+            self.cursor_position = 0
+
+    def _navigate_down(self) -> None:
+        """Go to newer (more recent) history entry."""
+        if self.history_pos <= 0:
+            # Already at current or no history - go empty
+            self.history_pos = 0
+            self.value = ""
+            self.cursor_position = 0
+            self.current_input = ""
+            return
+
+        self.history_pos -= 1
+
+        if self.history_pos == 0:
+            # Back to current input
+            self.value = self.current_input
+            self.cursor_position = len(self.value)
+        elif self.history_pos <= len(self.history):
+            self.value = self.history[-self.history_pos]
+            self.cursor_position = len(self.value)
+        else:
+            # Overflow - go empty
+            self.value = ""
+            self.cursor_position = 0
 
 
 class ConversationPanel(ScrollableContainer):
@@ -88,8 +174,8 @@ class InputPanel(Container):
 
     def compose(self) -> ComposeResult:
         """Compose the input panel."""
-        yield Input(
-            placeholder="Type your question or command here...",
+        yield HistoryInput(
+            placeholder="Type your question or command here... (↑↓ for history)",
             id="user-input"
         )
 
@@ -146,11 +232,12 @@ class LegacyHelperApp(App[None]):
         if self.conversation_panel:
             self.conversation_panel.add_message(
                 "system",
-                "Welcome to LegacyHelper! Ask me anything about troubleshooting your Linux/UNIX system."
+                "Welcome to LegacyHelper! " \
+                + "Ask me anything about troubleshooting your Linux/UNIX system."
             )
 
         # Focus the input field
-        input_widget = self.query_one("#user-input", Input)
+        input_widget = self.query_one("#user-input", HistoryInput)
         input_widget.focus()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -163,7 +250,9 @@ class LegacyHelperApp(App[None]):
         if not user_input:
             return
 
-        # Clear input
+        # Add to history and clear input
+        input_widget = self.query_one("#user-input", HistoryInput)
+        input_widget.add_to_history(user_input)
         event.input.value = ""
 
         # Add user message to conversation
@@ -181,8 +270,9 @@ class LegacyHelperApp(App[None]):
         # Get response from agent
         if self.agent:
             try:
-                result = await self.agent.run(user_input, 
-                                              message_history=self.message_history)
+                result = await self.agent.run(
+                    user_input, message_history=self.message_history
+                )
                 response = str(result.output)
                 self.message_history = result.all_messages()
 
@@ -236,7 +326,7 @@ class LegacyHelperApp(App[None]):
 
         elif button_id == "modify-cmd" and self.current_command:
             # Pre-fill input with current command
-            input_widget = self.query_one("#user-input", Input)
+            input_widget = self.query_one("#user-input", HistoryInput)
             input_widget.value = self.current_command.command
             input_widget.focus()
             await event.button.parent.remove()
@@ -319,6 +409,6 @@ class LegacyHelperApp(App[None]):
         if self.status_bar:
             self.status_bar.set_status("ready")
 
-    def action_quit(self) -> None:
+    async def action_quit(self) -> None:
         """Quit the application."""
         self.exit()
