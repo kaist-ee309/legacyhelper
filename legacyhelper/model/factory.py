@@ -123,12 +123,12 @@ class ModelFactory:
         # Check for API keys in order of preference
         if os.environ.get("OPENAI_API_KEY"):
             return cls.create("openai", **kwargs)
-        elif os.environ.get("ANTHROPIC_API_KEY"):
+        if os.environ.get("ANTHROPIC_API_KEY"):
             return cls.create("claude", **kwargs)
-        elif os.environ.get("GEMINI_API_KEY"):
+        if os.environ.get("GEMINI_API_KEY"):
             return cls.create("gemini", **kwargs)
-        else:
-            raise ValueError(
+
+        raise ValueError(
                 "No API key found. Set one of the following environment variables:\n"
                 "  - OPENAI_API_KEY for OpenAI (GPT-4, GPT-3.5, etc.)\n"
                 "  - ANTHROPIC_API_KEY for Claude\n"

@@ -232,8 +232,8 @@ class LegacyHelperApp(App[None]):
         if self.conversation_panel:
             self.conversation_panel.add_message(
                 "system",
-                "Welcome to LegacyHelper! " \
-                + "Ask me anything about troubleshooting your Linux/UNIX system."
+                "Welcome to LegacyHelper! Ask me anything about "
+                "troubleshooting your Linux/UNIX system."
             )
 
         # Focus the input field
