@@ -175,7 +175,7 @@ class InputPanel(Container):
     def compose(self) -> ComposeResult:
         """Compose the input panel."""
         yield HistoryInput(
-            placeholder="Type your question or command here... (↑↓ for history)",
+            placeholder="Type your question or command here... (up/down for history)",
             id="user-input"
         )
 
