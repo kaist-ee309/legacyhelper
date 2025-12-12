@@ -79,9 +79,8 @@ def get_previous_system_log() -> str:
 @system_log_toolset.tool
 def get_filtered_shell_history(ctx: RunContext[None], n: int = 10) -> str:
     """
-    Reads the last n lines of the current shell history, removes sensitive data,
-    and returns them as a single string. Call when shell history need to be known
-    for trouble shooting
+    Reads the last n lines of the current shell history i.e. command line history
+    Call when shell history or command history need to be known for trouble shooting
 
     n is a positive integer (default: 10)
     """

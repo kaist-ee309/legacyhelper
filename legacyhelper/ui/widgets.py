@@ -1,12 +1,168 @@
 """Custom widgets for LegacyHelper TUI."""
+import re
 from textual.widgets import Static, Button, Label
 from textual.containers import Container, Horizontal
 from textual.app import ComposeResult
+from textual.message import Message
 from rich.syntax import Syntax
 from rich.markdown import Markdown
 
 
-class MessageWidget(Static):
+def parse_markdown_segments(text: str) -> list:
+    """Parse markdown into segments of text and code blocks.
+
+    Only matches code blocks with a language specifier (```bash, ```python, etc.)
+
+    Args:
+        text: Markdown text containing code blocks
+
+    Returns:
+        List of tuples: ('text', content) or ('code', code, language)
+    """
+    segments = []
+    remaining = text
+
+    # Pattern for fenced code blocks with language: ```lang\ncode\n```
+    # Requires at least one character for language (\w+)
+    fenced_pattern = r'```([a-zA-Z]+)\n([\s\S]*?)```'
+
+    last_end = 0
+    for match in re.finditer(fenced_pattern, remaining):
+        # Add text before this code block
+        if match.start() > last_end:
+            text_before = remaining[last_end:match.start()].strip()
+            if text_before:
+                segments.append(('text', text_before))
+
+        # Add the code block
+        lang = match.group(1)
+        code = match.group(2).strip()
+        if code:
+            segments.append(('code', code, lang))
+
+        last_end = match.end()
+
+    # Add remaining text after last code block
+    if last_end < len(remaining):
+        text_after = remaining[last_end:].strip()
+        if text_after:
+            segments.append(('text', text_after))
+
+    # If no fenced blocks found, return whole text
+    if not segments:
+        segments.append(('text', text))
+
+    return segments
+
+
+class CopyButton(Button):
+    """A small copy button for copying content."""
+
+    DEFAULT_CSS = """
+    CopyButton {
+        min-width: 4;
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        margin: 0;
+        background: $surface;
+        border: none;
+    }
+
+    CopyButton:hover {
+        background: $primary;
+    }
+
+    CopyButton.-copied {
+        background: $success;
+    }
+    """
+
+    class Copied(Message):
+        """Message emitted when content is copied."""
+
+        def __init__(self, content: str) -> None:
+            self.content = content
+            super().__init__()
+
+    def __init__(self, content_to_copy: str, **kwargs) -> None:
+        """Initialize copy button.
+
+        Args:
+            content_to_copy: The content to copy when clicked
+        """
+        super().__init__("📋", **kwargs)
+        self.content_to_copy = content_to_copy
+
+    def on_click(self) -> None:
+        """Handle click to copy content."""
+        self.app.copy_to_clipboard(self.content_to_copy)
+        self.label = "✓"
+        self.add_class("-copied")
+        self.set_timer(1.5, self._reset_button)
+
+    def _reset_button(self) -> None:
+        """Reset button to original state."""
+        self.label = "📋"
+        self.remove_class("-copied")
+
+
+class MessageContent(Static):
+    """Static widget for message content."""
+
+    DEFAULT_CSS = """
+    MessageContent {
+        width: 1fr;
+    }
+    """
+
+
+class CodeBlockWidget(Container):
+    """Widget for displaying a code block with copy button on the right."""
+
+    DEFAULT_CSS = """
+    CodeBlockWidget {
+        width: 100%;
+        height: auto;
+        layout: horizontal;
+        margin: 1 0;
+    }
+
+    CodeBlockWidget .code-content {
+        width: 1fr;
+        background: $surface-darken-2;
+        padding: 1;
+        border-left: thick $success;
+    }
+
+    CodeBlockWidget CopyButton {
+        width: auto;
+        height: auto;
+        margin-left: 1;
+    }
+    """
+
+    def __init__(self, code: str, language: str = "bash", **kwargs) -> None:
+        """Initialize code block widget.
+
+        Args:
+            code: The code content
+            language: The programming language for syntax highlighting
+        """
+        super().__init__(**kwargs)
+        self.code = code
+        self.language = language
+
+    def compose(self) -> ComposeResult:
+        """Compose the code block with copy button."""
+        yield Static(
+            Syntax(self.code, self.language, theme="monokai", line_numbers=False),
+            classes="code-content"
+        )
+        yield CopyButton(self.code)
+
+
+class MessageWidget(Container):
     """Widget for displaying a single message in the conversation."""
 
     DEFAULT_CSS = """
@@ -36,6 +192,14 @@ class MessageWidget(Static):
         background: $error-darken-3;
         border-left: thick $error;
     }
+
+    MessageWidget .assistant-label {
+        margin-bottom: 1;
+    }
+
+    MessageWidget .text-content {
+        width: 100%;
+    }
     """
 
     def __init__(self, role: str, content: str, **kwargs) -> None:
@@ -50,16 +214,30 @@ class MessageWidget(Static):
         self.content = content
         self.add_class(f"{role}-message")
 
-    def on_mount(self) -> None:
-        """Render the message when mounted."""
-        if self.role == "user":
-            self.update(f"[bold cyan]You:[/bold cyan] {self.content}")
-        elif self.role == "assistant":
-            self.update(Markdown(f"**Assistant:** {self.content}"))
-        elif self.role == "error":
-            self.update(f"[bold red]Error:[/bold red] {self.content}")
+    def compose(self) -> ComposeResult:
+        """Compose the message widget."""
+        if self.role == "assistant":
+            # Label on its own line
+            yield Static("[bold magenta]Assistant:[/bold magenta]",
+                         classes="assistant-label")
+            # Parse content into text and code segments
+            segments = parse_markdown_segments(self.content)
+            for segment in segments:
+                if segment[0] == 'text':
+                    # Render text as markdown
+                    yield Static(Markdown(segment[1]), classes="text-content")
+                elif segment[0] == 'code':
+                    # Render code block with copy button
+                    yield CodeBlockWidget(segment[1], segment[2])
         else:
-            self.update(f"[dim italic]{self.content}[/dim italic]")
+            content_widget = MessageContent()
+            if self.role == "user":
+                content_widget.update(f"[bold cyan]You:[/bold cyan] {self.content}")
+            elif self.role == "error":
+                content_widget.update(f"[bold red]Error:[/bold red] {self.content}")
+            else:
+                content_widget.update(f"[dim italic]{self.content}[/dim italic]")
+            yield content_widget
 
 
 class CommandPreviewWidget(Container):
