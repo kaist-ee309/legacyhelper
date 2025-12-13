@@ -127,7 +127,7 @@ def main() -> None:
         sys.exit(1)
 
     # Initialize agent with the model
-    agent = Agent(model=model, tools=[],
+    agent = Agent(model=model, tools=[nash_tool],
                             toolsets=[SYSTEM_LOG_TOOLSET],
                             system_prompt=SYSTEM)
     app = LegacyHelperApp(agent=agent)
