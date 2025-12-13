@@ -1,5 +1,4 @@
 """Main Textual application for LegacyHelper."""
-import asyncio
 from typing import Optional, List
 from textual.app import App, ComposeResult
 from textual.containers import Container, ScrollableContainer
@@ -7,7 +6,7 @@ from textual.widgets import Header, Footer, Input
 from textual.binding import Binding
 from textual.reactive import reactive
 from textual import events
-from pydantic_ai import Agent, AgentRunResultEvent
+from pydantic_ai import Agent, FinalResultEvent, FunctionToolCallEvent
 
 from legacyhelper.ui.widgets import (
     MessageWidget,
@@ -296,7 +295,6 @@ class LegacyHelperApp(App[None]):
         # Get response from agent with streaming
         if self.agent:
             try:
-                from pydantic_ai import FinalResultEvent, FunctionToolCallEvent
                 streaming_message: Optional[StreamingMessageWidget] = None
                 # Use agent.iter() to iterate over event graph (model requests, tool calls, etc.)
                 async with self.agent.iter(
@@ -312,7 +310,7 @@ class LegacyHelperApp(App[None]):
                                     if isinstance(event, FinalResultEvent):
                                         if self.conversation_panel:
                                             streaming_message = self.conversation_panel.add_streaming_message()
-                                        final_result_found = True                                    
+                                        final_result_found = True
                                         break
 
                                 if final_result_found:
@@ -322,7 +320,7 @@ class LegacyHelperApp(App[None]):
                                         self.current_spinner = None
                                     # Once final response is observed, this can be streamed out
                                     # to display.
-                                    async for output in request_stream.stream_text(delta=True, 
+                                    async for output in request_stream.stream_text(delta=True,
                                                                                     debounce_by=0.01):
                                         if streaming_message:
                                             streaming_message.append_text(output)
@@ -334,16 +332,12 @@ class LegacyHelperApp(App[None]):
                                         if self.conversation_panel and not self.current_spinner:
                                             command = event.part.args_as_dict().pop("command", "")
                                             self.current_spinner = self.conversation_panel.add_spinner(f"Running... {command}")
-                                
-
-                            
-
 
                 # Update status
                 if self.status_bar:
                     self.status_bar.set_status("ready")
 
-            except Exception as e:
+            except Exception as e: #
                 # Remove spinner on error
                 if self.current_spinner:
                     await self.current_spinner.remove()
@@ -370,102 +364,13 @@ class LegacyHelperApp(App[None]):
         button_id = event.button.id
 
         if button_id == "execute-cmd" and self.current_command:
-            await self._execute_current_command()
-            await event.button.parent.remove()
+            pass
 
         elif button_id == "reject-cmd":
-            if self.conversation_panel:
-                self.conversation_panel.add_message(
-                    "system",
-                    "✗ Command rejected"
-                )
-            await event.button.parent.remove()
-            self.current_command = None
+            pass
 
         elif button_id == "modify-cmd" and self.current_command:
-            # Pre-fill input with current command
-            input_widget = self.query_one("#user-input", HistoryInput)
-            input_widget.value = self.current_command.command
-            input_widget.focus()
-            await event.button.parent.remove()
-            self.current_command = None
-
-    async def _execute_current_command(self) -> None:
-        """Execute the currently selected command."""
-        if not self.current_command or not self.conversation_panel:
-            return
-
-        command = self.current_command.command
-
-        # Update status
-        if self.status_bar:
-            self.status_bar.set_status("thinking")
-
-        self.conversation_panel.add_message(
-            "system",
-            f"⚙️ Executing: `{command}`"
-        )
-
-        # Check if we can execute
-        can_exec, reason = self.command_executor.can_execute(command)
-        if not can_exec:
-            self.conversation_panel.add_message(
-                "error",
-                f"Cannot execute: {reason}"
-            )
-            if self.status_bar:
-                self.status_bar.set_status("error")
-            self.current_command = None
-            return
-
-        # Execute the command in a thread pool
-        result = await asyncio.to_thread(
-            self.interactive_executor.execute_with_confirmation,
-            command,
-            confirmed=True
-        )
-
-        # Display results
-        if result.success:
-            output = result.stdout if result.stdout else result.stderr
-            self.conversation_panel.add_command_output(
-                command,
-                output,
-                result.exit_code
-            )
-        else:
-            error_msg = result.error_message or result.stderr or "Command failed"
-            self.conversation_panel.add_message(
-                "error",
-                f"Execution failed: {error_msg}"
-            )
-            if result.stderr or result.stdout:
-                self.conversation_panel.add_command_output(
-                    command,
-                    result.stderr or result.stdout,
-                    result.exit_code
-                )
-
-        # Update status
-        if self.status_bar:
-            self.status_bar.set_status("ready" if result.success else "error")
-
-        self.current_command = None
-
-    def action_clear_conversation(self) -> None:
-        """Clear the conversation panel."""
-        if self.conversation_panel:
-            for widget in self.conversation_panel.query(
-                "MessageWidget, CommandPreviewWidget, CommandOutputWidget"
-            ):
-                widget.remove()
-            self.conversation_panel.add_message(
-                "system",
-                "Conversation cleared. How can I help you?"
-            )
-
-        if self.status_bar:
-            self.status_bar.set_status("ready")
+            pass
 
     async def action_quit(self) -> None:
         """Quit the application."""

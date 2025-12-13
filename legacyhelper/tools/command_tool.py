@@ -55,25 +55,31 @@ system_log_toolset = FunctionToolset(tools=[])
 
 
 @system_log_toolset.tool
-def get_current_system_log() -> str:
+def get_current_system_log_linux() -> str:
     """
     Get the system log for the current boot.
     Call when "error" level system log is needed.
     """
     command = ["journalctl", "-p", "3", "-xb", "--no-pager"]
-    result = subprocess.run(command, capture_output=True, text=True, check=True)
-    return result.stdout
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        return result.stdout
+    except FileNotFoundError as e:
+        return str(e)
 
 
 @system_log_toolset.tool
-def get_previous_system_log() -> str:
+def get_previous_system_log_linux() -> str:
     """
     Get the system log for the previous boot.
     Call when system log for previous boot is required or booting related problem.
     """
     command = ["journalctl", "-p", "3", "-xb", "-1", "--no-pager"]
-    result = subprocess.run(command, capture_output=True, text=True, check=True)
-    return result.stdout
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        return result.stdout
+    except FileNotFoundError as e:
+        return str(e)
 
 
 @system_log_toolset.tool

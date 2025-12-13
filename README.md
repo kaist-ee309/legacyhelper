@@ -1,262 +1,111 @@
 # LegacyHelper
 
-AI-powered troubleshooting assistant for legacy Linux/UNIX systems.
+An AI-powered troubleshooting agent for legacy Linux/UNIX systems. LegacyHelper diagnoses system issues, retrieves relevant troubleshooting information from external sources, and presents command options for user approval before execution.
 
 ## Features
 
-- **Multi-LLM Support**: Works with OpenAI (GPT-4), Anthropic (Claude), or Google (Gemini) - switch easily between providers
-- **Interactive Terminal UI**: Sophisticated TUI powered by Textual, similar to Claude Code and Gemini CLI
-- **Conversational Interface**: Chat-like interaction with message history and markdown rendering
-- **Smart Command Parser**: Automatically extracts commands from AI responses with confidence scoring
-- **Command Preview**: Review and approve commands before execution (human-in-the-loop)
-- **Safety Checks**: Detects dangerous commands (rm -rf, dd, mkfs, etc.) with warnings
-- **Real Command Execution**: Execute shell commands safely with timeout protection
-- **Command Output Display**: View execution results with syntax highlighting
-- **Status Bar**: Live status indicator showing AI thinking state and connection status
-- **AI-Powered Analysis**: Intelligent troubleshooting suggestions from your choice of LLM
-- **Type-Safe**: Full type hints throughout the codebase
+- **Intelligent System Diagnosis** – Analyzes system logs and configuration
+- **External Resource Integration** – Searches StackOverflow, ArchWiki, and other resources for solutions
+- **Human-in-the-Loop Execution** – Presents command options for user review and approval
+- **Multi-Model Support** – Works with OpenAI, Claude, and Google Gemini
+- **Interactive TUI** – Rich terminal user interface with streaming output
 
-## Installation
+## Prerequisites
 
-This project uses `uv` for dependency management.
+- Python 3.11+
+- API key for at least one of: OpenAI, Claude (Anthropic), or Google Gemini
+
+## Setup
+
+### 1. Install Dependencies
 
 ```bash
-# Clone the repository
-git clone <your-repo-url>
-cd legacyhelper
-
-# Create and sync virtual environment
 uv venv
 uv sync
-
-# Set up your API key (choose one or more)
-export OPENAI_API_KEY='your-openai-key'      # For GPT-4, GPT-3.5
-export ANTHROPIC_API_KEY='your-claude-key'   # For Claude
-export GEMINI_API_KEY='your-gemini-key'      # For Gemini
 ```
 
-## Usage
+### 2. Configure API Key
 
-### TUI Mode (Default)
-
-Launch the interactive terminal UI:
+Set one of the following environment variables:
 
 ```bash
-# Activate the virtual environment
-source .venv/bin/activate
+# For OpenAI (GPT-4, GPT-3.5-turbo, etc.)
+export OPENAI_API_KEY="your-api-key-here"
 
-# Auto-detect which API key is set
+# OR for Claude (Anthropic)
+export ANTHROPIC_API_KEY="your-api-key-here"
+
+# OR for Google Gemini
+export GEMINI_API_KEY="your-api-key-here"
+```
+
+## Running
+
+### Default Mode (Auto-detect Model)
+Automatically detects which API key is set and uses the appropriate provider:
+
+```bash
 python main.py
-
-# Or use a specific provider
-python main.py --provider openai
-python main.py --provider claude
-python main.py --provider gemini
-
-# See all options
-python main.py --help
-python main.py --list-providers
 ```
 
-**Keyboard Shortcuts:**
-- `Ctrl+C` or `Ctrl+D` - Quit the application
-- `Ctrl+L` - Clear conversation history
-- `Enter` - Send message
-- `Tab` - Navigate between elements
-
-### CLI Mode (Legacy)
-
-For testing or compatibility:
-
+### Specify Provider
 ```bash
+# Use OpenAI
+python main.py --provider openai
+
+# Use Claude
+python main.py --provider claude
+
+# Use Gemini
+python main.py --provider gemini
+```
+
+### Specify Model
+```bash
+python main.py --provider openai --model gpt-4-turbo
+python main.py --provider claude --model claude-3-opus-20240229
+```
+
+### Additional Options
+```bash
+# List available providers and their API key status
+python main.py --list-providers
+
+# Adjust sampling temperature (0.0-2.0, default: 0.7)
+python main.py --temperature 0.5
+
+# Legacy CLI mode (non-TUI)
 python main.py --cli
 ```
 
-## UI Features
-
-The terminal UI includes:
-
-1. **Message History**: Scrollable conversation panel showing all interactions
-2. **Command Preview Widget**: When the AI suggests a command, you'll see:
-   - Syntax-highlighted command display
-   - Description of what the command does
-   - Three action buttons:
-     -  **Execute**: Run the command (to be implemented)
-     -  **Reject**: Dismiss the suggestion
-     -  **Modify**: Edit the command before executing
-
-3. **Input Panel**: Type your questions at the bottom of the screen
-
-# LegacyHelper Project File Tree
+## Project Structure
 
 ```
 legacyhelper/
-├── legacyhelper/                    # Main package directory
-│   ├── __init__.py
-│   ├── core/                        # Core agent logic
-│   │   ├── __init__.py
-│   │   ├── agent.py                 # Main Agent class
-│   │   ├── command_parser.py       # Command extraction and parsing
-│   │   ├── executor.py             # Command execution with safety checks
-│   │   └── history_reader.py       # Shell history reading and filtering
-│   ├── model/                       # AI model wrappers
-│   │   ├── __init__.py
-│   │   ├── base.py                  # Base model interface (abstract)
-│   │   ├── gemini.py                # Google Gemini implementation
-│   │   ├── openai.py                # OpenAI GPT implementation
-│   │   ├── claude.py                # Anthropic Claude implementation
-│   │   └── factory.py               # Model factory for creating models
-│   ├── tools/                       # MCP-based tools (future)
-│   │   └── __init__.py
-│   └── ui/                          # Terminal UI components
-│       ├── __init__.py
-│       ├── app.py                   # Main Textual application
-│       └── widgets.py               # Custom UI widgets
-│
-├── test/                            # Unit tests
-│   ├── test_agent.py
-│   ├── test_command_parser.py
-│   ├── test_executor.py
-│   └── test_model_factory.py
-│
-├── main.py                          # Application entry point
-├── test_legacyhelper_comprehensive.py  # Comprehensive test suite
-├── test_conversation.py             # Conversation testing
-├── test_tui.py                      # TUI testing
-├── demo_parser.py                   # Command parser demo
-├── list_models.py                   # Model listing utility
-├── run_all_tests.sh                 # Test runner script
-│
-├── README.md                        # Main documentation
-├── QUICKSTART.md                    # Quick start guide
-├── MULTI_MODEL_GUIDE.md            # Multi-model usage guide
-├── CHANGELOG.md                     # Version history
-├── CLAUDE.md                        # Project context for Claude
-├── test.txt                         # Testing file
-├── pyproject.toml                   # Project configuration and dependencies
-├── environment.yml                  # Conda environment (optional)
-├── uv.lock                          # UV lock file
-│
-└── __pycache__/                     # Python cache (generated)
+├── tools/        # System tools and MCP-based integrations
+├── core/         # AI agent core logic and workflows
+├── model/        # Model abstractions and factory
+├── ui/           # Terminal UI components (TUI)
+└── __init__.py
 ```
 
 ## Development
 
+### Run Tests
 ```bash
-# Install development dependencies
-uv sync --dev
-
-# Run tests (31 tests covering parser, executor, and agent)
 pytest
+```
 
-# Run tests with verbose output
-pytest -v
-
-# Run specific test file
-pytest test/test_command_parser.py
-
-# Run linting
+### Code Quality
+```bash
 pylint legacyhelper/
 ```
 
-### Testing Without API Key
-
-You can test the command parser and executor without setting up a Gemini API key:
-
-```bash
-# Run the demo script
-python demo_parser.py
-```
-
-This demonstrates:
-- Command extraction from markdown and text
-- Safety analysis and warnings
-- Command execution with output
-- Dangerous command detection
-
 ## Tech Stack
 
-- **Framework**: Pydantic AI
-- **Language**: Python 3.11+
-- **Package Manager**: uv
-- **UI Components**: Textual, Rich
-- **AI Models**: OpenAI (GPT-4), Anthropic (Claude), Google (Gemini)
-- **Testing**: pytest
-- **Code Quality**: pylint, type hints
-
-## Multi-Model Support
-
-LegacyHelper supports multiple LLM providers! See [MULTI_MODEL_GUIDE.md](MULTI_MODEL_GUIDE.md) for:
-- Detailed provider comparison
-- Model recommendations
-- Cost considerations
-- Programmatic usage examples
-
-## Roadmap
-
-### Completed ✓
-- [x] Basic terminal UI with Textual
-- [x] Message history and conversation flow
-- [x] Command preview interface
-- [x] Sophisticated command parser with confidence scoring
-- [x] Actual command execution with safety checks
-- [x] Dangerous command detection and warnings
-- [x] Status bar with live status updates
-- [x] Command output display with syntax highlighting
-- [x] Comprehensive unit tests (31 tests)
-- [x] Type hints throughout codebase
-
-### Planned
-- [ ] MCP tools integration for system information
-- [ ] Web search integration (StackOverflow, ArchWiki)
-- [ ] System log analysis
-- [ ] Multiple conversation threads
-- [ ] Command history and favorites
-- [ ] Persistent conversation storage
-- [ ] Export troubleshooting sessions
-- [ ] Plugin system for custom commands
-
-## Troubleshooting
-
-### AttributeError: 'LegacyHelperApp' object has no attribute 'run_in_thread'
-
-This error occurs during conversation when the app tries to call the AI model. **This has been fixed** by using `asyncio.to_thread()` instead of the non-existent `run_in_thread()` method.
-
-**Solution**: Ensure you're using the latest version. The fix uses Python's standard `asyncio.to_thread()` to properly run synchronous functions in the async event loop.
-
-### API Key Issues
-
-Make sure your Gemini API key is set correctly:
-```bash
-export GEMINI_API_KEY='your-api-key-here'
-# Verify it's set
-echo $GEMINI_API_KEY
-```
-
-### Import Errors
-
-If you get import errors, ensure dependencies are installed:
-```bash
-uv sync
-```
-
-### Test the Setup
-
-Run the initialization test to verify everything is working:
-```bash
-python test_tui.py
-```
-
-## Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass (`pytest`)
-5. Follow type hints convention
-6. Submit a pull request
-
-## License
-
-[Your License Here]
+- **Framework:** Pydantic AI
+- **Language:** Python 3.11+
+- **UI:** Textual + Rich
+- **Testing:** Pytest
+- **Package Manager:** uv
+- **LLM Providers:** OpenAI, Anthropic, Google Generative AI
