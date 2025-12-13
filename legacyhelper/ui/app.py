@@ -7,13 +7,15 @@ from textual.widgets import Header, Footer, Input
 from textual.binding import Binding
 from textual.reactive import reactive
 from textual import events
-from pydantic_ai import Agent
+from pydantic_ai import Agent, AgentRunResultEvent
 
 from legacyhelper.ui.widgets import (
     MessageWidget,
     CommandPreviewWidget,
     CommandOutputWidget,
-    StatusBarWidget
+    StatusBarWidget,
+    SpinnerWidget,
+    StreamingMessageWidget
 )
 
 
@@ -142,6 +144,31 @@ class ConversationPanel(ScrollableContainer):
         self.scroll_end(animate=True)
         return preview
 
+    def add_spinner(self, message: str = "Thinking...") -> SpinnerWidget:
+        """Add a spinner widget to show processing state.
+
+        Args:
+            message: The message to display with the spinner
+
+        Returns:
+            The mounted SpinnerWidget
+        """
+        spinner = SpinnerWidget(message)
+        self.mount(spinner)
+        self.scroll_end(animate=True)
+        return spinner
+
+    def add_streaming_message(self) -> StreamingMessageWidget:
+        """Add a streaming message widget.
+
+        Returns:
+            The mounted StreamingMessageWidget
+        """
+        message = StreamingMessageWidget(parent_container=self)
+        self.mount(message)
+        self.scroll_end(animate=True)
+        return message
+
     def add_command_output(self, command: str, output: str, exit_code: int) -> None:
         """Add command execution output.
 
@@ -215,6 +242,7 @@ class LegacyHelperApp(App[None]):
         self.message_history = None
         self.conversation_panel: Optional[ConversationPanel] = None
         self.status_bar: Optional[StatusBarWidget] = None
+        self.current_spinner: Optional[SpinnerWidget] = None
 
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
@@ -258,40 +286,70 @@ class LegacyHelperApp(App[None]):
         # Add user message to conversation
         if self.conversation_panel:
             self.conversation_panel.add_message("user", user_input)
-            self.conversation_panel.add_message(
-                "system",
-                "🤔 Thinking..."
-            )
+            # Add spinner instead of static message
+            self.current_spinner = self.conversation_panel.add_spinner("Thinking...")
 
         # Update status
         if self.status_bar:
             self.status_bar.set_status("thinking")
 
-        # Get response from agent
+        # Get response from agent with streaming
         if self.agent:
             try:
-                result = await self.agent.run(
+                from pydantic_ai import FinalResultEvent, FunctionToolCallEvent
+                streaming_message: Optional[StreamingMessageWidget] = None
+                # Use agent.iter() to iterate over event graph (model requests, tool calls, etc.)
+                async with self.agent.iter(
                     user_input, message_history=self.message_history
-                )
-                response = str(result.output)
-                self.message_history = result.all_messages()
+                ) as result:
+                    # Process each node in the agent graph
+                    async for node in result:
+                        # Check if this is a model request node with streaming text
+                        if self.agent.is_model_request_node(node):
+                            async with node.stream(result.ctx) as request_stream:
+                                final_result_found = False
+                                async for event in request_stream:
+                                    if isinstance(event, FinalResultEvent):
+                                        if self.conversation_panel:
+                                            streaming_message = self.conversation_panel.add_streaming_message()
+                                        final_result_found = True                                    
+                                        break
 
-                # Remove "thinking" message
-                if self.conversation_panel:
-                    messages = list(self.conversation_panel.query("MessageWidget"))
-                    if messages and "Thinking" in str(messages[-1].content):
-                        await messages[-1].remove()
-                    self.conversation_panel.add_message("assistant", response)
+                                if final_result_found:
+                                    # Stop spinner.
+                                    if self.current_spinner:
+                                        await self.current_spinner.remove()
+                                        self.current_spinner = None
+                                    # Once final response is observed, this can be streamed out
+                                    # to display.
+                                    async for output in request_stream.stream_text(delta=True, 
+                                                                                    debounce_by=0.01):
+                                        if streaming_message:
+                                            streaming_message.append_text(output)
+
+                        elif self.agent.is_call_tools_node(node):
+                            async with node.stream(result.ctx) as handle_stream:
+                                async for event in handle_stream:
+                                    if isinstance(event, FunctionToolCallEvent):
+                                        if self.conversation_panel and not self.current_spinner:
+                                            command = event.part.args_as_dict().pop("command", "")
+                                            self.current_spinner = self.conversation_panel.add_spinner(f"Running... {command}")
+                                
+
+                            
+
 
                 # Update status
                 if self.status_bar:
                     self.status_bar.set_status("ready")
 
             except Exception as e:
+                # Remove spinner on error
+                if self.current_spinner:
+                    await self.current_spinner.remove()
+                    self.current_spinner = None
+
                 if self.conversation_panel:
-                    messages = list(self.conversation_panel.query("MessageWidget"))
-                    if messages:
-                        await messages[-1].remove()
                     self.conversation_panel.add_message(
                         "error",
                         f"{str(e)}"

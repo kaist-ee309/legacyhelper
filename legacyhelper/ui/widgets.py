@@ -1,5 +1,6 @@
 """Custom widgets for LegacyHelper TUI."""
 import re
+from typing import Optional
 from textual.widgets import Static, Button, Label
 from textual.containers import Container, Horizontal
 from textual.app import ComposeResult
@@ -240,6 +241,70 @@ class MessageWidget(Container):
             yield content_widget
 
 
+class StreamingMessageWidget(Container):
+    """Widget for displaying a streaming assistant message with incremental text updates."""
+
+    DEFAULT_CSS = """
+    StreamingMessageWidget {
+        width: 100%;
+        height: auto;
+        padding: 1 2;
+        margin-bottom: 1;
+        background: $surface-darken-1;
+        border-left: thick $accent;
+    }
+
+    StreamingMessageWidget .assistant-label {
+        margin-bottom: 1;
+    }
+
+    StreamingMessageWidget .text-content {
+        width: 100%;
+    }
+    """
+
+    def __init__(self, parent_container=None, **kwargs) -> None:
+        """Initialize streaming message widget.
+
+        Args:
+            parent_container: Reference to parent ScrollableContainer for auto-scroll
+        """
+        super().__init__(**kwargs)
+        self.add_class("assistant-message")
+        self.text_content: Optional[Static] = None
+        self.accumulated_text: str = ""
+        self.parent_container = parent_container
+
+    def compose(self) -> ComposeResult:
+        """Compose the streaming message widget."""
+        yield Static("[bold magenta]Assistant:[/bold magenta]",
+                     classes="assistant-label")
+        self.text_content = Static("", classes="text-content")
+        yield self.text_content
+
+    def append_text(self, chunk: str) -> None:
+        """Append text chunk to the message.
+
+        Args:
+            chunk: Text chunk to append
+        """
+        self.accumulated_text += chunk
+        if self.text_content:
+            self.text_content.update(Markdown(self.accumulated_text))
+
+        # Auto-scroll parent container to keep new text visible
+        if self.parent_container:
+            self.parent_container.scroll_end(animate=False)
+
+    def get_content(self) -> str:
+        """Get the complete accumulated text.
+
+        Returns:
+            The complete message content
+        """
+        return self.accumulated_text
+
+
 class CommandPreviewWidget(Container):
     """Widget for displaying and selecting proposed commands."""
 
@@ -377,6 +442,53 @@ class CommandOutputWidget(Container):
             self.output if self.output else "[dim](no output)[/dim]",
             classes="output-content"
         )
+
+
+class SpinnerWidget(Container):
+    """Animated spinner widget for indicating processing state."""
+
+    DEFAULT_CSS = """
+    SpinnerWidget {
+        width: 100%;
+        height: auto;
+        padding: 1 2;
+        margin-bottom: 1;
+        background: $warning-darken-3;
+        border-left: thick $warning;
+    }
+    """
+
+    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self, message: str = "Thinking...", **kwargs) -> None:
+        """Initialize spinner widget.
+
+        Args:
+            message: The message to display alongside the spinner
+        """
+        super().__init__(**kwargs)
+        self.message = message
+        self.frame_index = 0
+        self.content_widget = None
+
+    def compose(self) -> ComposeResult:
+        """Compose the spinner widget."""
+        self.content_widget = MessageContent()
+        yield self.content_widget
+
+    def on_mount(self) -> None:
+        """Start the spinner animation when mounted."""
+        self.update_spinner()
+        self.set_interval(0.1, self.update_spinner)
+
+    def update_spinner(self) -> None:
+        """Update the spinner to the next frame."""
+        if self.content_widget:
+            frame = self.SPINNER_FRAMES[self.frame_index]
+            self.content_widget.update(
+                f"[dim italic]{frame} {self.message}[/dim italic]"
+            )
+            self.frame_index = (self.frame_index + 1) % len(self.SPINNER_FRAMES)
 
 
 class StatusBarWidget(Static):
