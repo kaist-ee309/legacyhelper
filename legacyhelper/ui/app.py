@@ -330,9 +330,11 @@ class LegacyHelperApp(App[None]):
                                 async for event in handle_stream:
                                     if isinstance(event, FunctionToolCallEvent):
                                         if self.conversation_panel and not self.current_spinner:
-                                            command = event.part.args_as_dict().pop("command", "")
-                                            self.current_spinner = self.conversation_panel.add_spinner(f"Running... {command}")
-
+                                            command = event.part.args_as_dict().pop("command", None)
+                                            tool_name = event.part.args_as_dict().pop("tool_name", "[GENERIC TOOL]")
+                                            entity = command if command is not None else tool_name
+                                            self.current_spinner = self.conversation_panel.add_spinner(f"Running... {entity}")
+                self.message_history = result.result.all_messages()
                 # Update status
                 if self.status_bar:
                     self.status_bar.set_status("ready")
