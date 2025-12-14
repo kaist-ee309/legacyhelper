@@ -278,7 +278,6 @@ class StreamingMessageWidget(Container):
         self.accumulated_text: str = ""
         self.parent_container = parent_container
         self._update_pending = False
-        self._finalized = False
 
     def compose(self) -> ComposeResult:
         """Compose the streaming message widget."""
@@ -295,8 +294,6 @@ class StreamingMessageWidget(Container):
         Args:
             chunk: Text chunk to append
         """
-        if self._finalized:
-            return
         self.accumulated_text += chunk
         # Schedule UI update on main thread to avoid race conditions
         if not self._update_pending:
@@ -306,44 +303,11 @@ class StreamingMessageWidget(Container):
     def _do_update(self) -> None:
         """Perform the actual UI update on the main thread."""
         self._update_pending = False
-        if self._finalized:
-            return
+
         if self.text_content:
             self.text_content.update(Markdown(self.accumulated_text))
 
         # Auto-scroll parent container to keep new text visible
-        if self.parent_container:
-            self.parent_container.scroll_end(animate=False)
-
-    def finalize(self) -> None:
-        """Finalize the streaming message, replacing with proper code blocks."""
-        if self._finalized:
-            return
-        self._finalized = True
-
-        # Parse content into segments
-        segments = parse_markdown_segments(self.accumulated_text)
-
-        # Check if there are any code blocks
-        has_code = any(s[0] == 'code' for s in segments)
-        if not has_code:
-            return  # No code blocks, keep as-is
-
-        # Remove the simple text content widget
-        if self.text_content:
-            self.text_content.remove()
-            self.text_content = None
-
-        # Mount parsed segments with code blocks having copy buttons
-        for segment in segments:
-            if segment[0] == 'text':
-                widget = Static(Markdown(segment[1]), classes="text-content")
-                self.mount(widget)
-            elif segment[0] == 'code':
-                widget = CodeBlockWidget(segment[1], segment[2])
-                self.mount(widget)
-
-        # Scroll to show the updated content
         if self.parent_container:
             self.parent_container.scroll_end(animate=False)
 
