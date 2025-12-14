@@ -74,15 +74,13 @@ python main.py --list-providers
 # Adjust sampling temperature (0.0-2.0, default: 0.7)
 python main.py --temperature 0.5
 
-# Legacy CLI mode (non-TUI)
-python main.py --cli
 ```
 
 ## Project Structure
 
 ```
 legacyhelper/
-├── tools/        # System tools and MCP-based integrations
+├── tools/        # System tools and bash execution tool
 ├── core/         # AI agent core logic and workflows
 ├── model/        # Model abstractions and factory
 ├── ui/           # Terminal UI components (TUI)
@@ -98,7 +96,7 @@ pytest
 
 ### Code Quality
 ```bash
-pylint legacyhelper/
+pylint legacyhelper --disable=all --enable=C,W,E 2>&1
 ```
 
 ## Tech Stack

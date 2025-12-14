@@ -61,7 +61,7 @@ class HistoryInput(Input):
             return
 
         # Save current input when starting navigation
-        if self.history_pos == 0:
+        if not self.history_pos:
             self.current_input = self.value
 
         # If at overflow, wrap back to most recent
@@ -92,7 +92,7 @@ class HistoryInput(Input):
 
         self.history_pos -= 1
 
-        if self.history_pos == 0:
+        if not self.history_pos:
             # Back to current input
             self.value = self.current_input
             self.cursor_position = len(self.value)
@@ -374,8 +374,8 @@ class LegacyHelperApp(App[None]):
                     self.agent, user_input, callbacks
                 )
 
-        except Exception as e:
-            await self._handle_error(e)
+        except Exception as exc:  # pylint: disable=broad-except
+            await self._handle_error(exc)
         finally:
             self._processing = False
 

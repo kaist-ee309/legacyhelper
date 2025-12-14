@@ -79,8 +79,8 @@ def get_current_system_log() -> str:
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True)
         return result.stdout
-    except Exception as e:
-        return str(e)
+    except Exception as exc:  # pylint: disable=broad-except
+        return str(exc)
 
 
 @system_log_toolset.tool
@@ -93,8 +93,8 @@ def get_previous_system_log() -> str:
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True)
         return result.stdout
-    except Exception as e:
-        return str(e)
+    except Exception as exc:  # pylint: disable=broad-except
+        return str(exc)
 
 
 @system_log_toolset.tool
@@ -216,6 +216,6 @@ bash_tool = Tool(
     name="bash",
     description=("Run safe bash commands in the configured working directory."
                  "The tool rejects command response beyond given max_length."
-                 "Devise a command efficiently so no redundant retries as possible."), 
-    takes_ctx=False, 
+                 "Devise a command efficiently so no redundant retries as possible."),
+    takes_ctx=False,
 )

@@ -435,12 +435,12 @@ class CommandOutputWidget(Container):
         self.command = command
         self.output = output
         self.exit_code = exit_code
-        if exit_code != 0:
+        if exit_code:
             self.add_class("error-output")
 
     def compose(self) -> ComposeResult:
         """Compose the output display."""
-        if self.exit_code == 0:
+        if not self.exit_code:
             yield Label("✓ Command Output:", classes="output-title")
         else:
             yield Label(f"✗ Command Failed (exit code: {self.exit_code}):", classes="output-title")

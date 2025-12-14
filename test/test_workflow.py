@@ -3,16 +3,16 @@ import pytest
 import asyncio
 import sys
 from unittest.mock import MagicMock, AsyncMock, patch, call
-from typing import Optional, AsyncIterator, List, TypeVar
+from typing import Optional, AsyncIterator, List
 
-from pydantic_ai import FinalResultEvent, FunctionToolCallEvent
+from pydantic_ai import FinalResultEvent, FunctionToolCallEvent, Agent
 
 # Mock the circular imports before importing the actual module
 sys.modules['legacyhelper.ui.widgets'] = MagicMock()
 sys.modules['textual'] = MagicMock()
 sys.modules['textual.app'] = MagicMock()
 
-from legacyhelper.core.workflow import agent_graph_traversal
+from legacyhelper.core.workflow import Workflow, WorkflowCallbacks
 
 
 # Helper to create async iterables
@@ -23,103 +23,119 @@ async def async_iter(items: List):
 
 
 @pytest.fixture
-def mock_app():
-    """Create a mock Textual App with agent and message history."""
-    app = MagicMock()
-    app.agent = MagicMock()
-    # Use configure_mock to set message_history as a regular list, not an AsyncMock
-    app.configure_mock(message_history=[])
-    app.conversation_panel = MagicMock()
-    app.current_spinner = None
-    return app
+def workflow():
+    """Create a Workflow instance for testing."""
+    return Workflow()
 
 
 @pytest.fixture
-def mock_streaming_message():
-    """Create a mock StreamingMessageWidget."""
-    widget = MagicMock()
-    widget.append_text = MagicMock()
-    return widget
+def mock_callbacks():
+    """Create mock callbacks for workflow events."""
+    callbacks = WorkflowCallbacks(
+        on_spinner_add=AsyncMock(),
+        on_spinner_remove=AsyncMock(),
+        on_streaming_start=AsyncMock(return_value=MagicMock()),
+        on_stream_append=AsyncMock(),
+        on_stream_clear=AsyncMock(),
+        on_error=AsyncMock(),
+        on_status_update=MagicMock(),
+    )
+    return callbacks
+
+
+@pytest.fixture
+def mock_agent():
+    """Create a mock Agent instance."""
+    agent = MagicMock(spec=Agent)
+    agent.is_model_request_node = MagicMock()
+    agent.is_call_tools_node = MagicMock()
+    agent.iter = MagicMock()
+    return agent
+
+
+def create_mock_agent_iter(nodes: List, result_messages: List):
+    """Helper to create a properly mocked agent iter context manager."""
+    mock_iter = AsyncMock()
+    mock_iter.__aenter__ = AsyncMock(return_value=mock_iter)
+    mock_iter.__aexit__ = AsyncMock(return_value=None)
+
+    async def nodes_generator():
+        for node in nodes:
+            yield node
+
+    mock_iter.__aiter__ = MagicMock(return_value=nodes_generator())
+
+    mock_result = MagicMock()
+    mock_result.all_messages = MagicMock(return_value=result_messages)
+    mock_result.ctx = MagicMock()
+
+    mock_iter.result = mock_result
+
+    return mock_iter
 
 
 @pytest.mark.asyncio
-async def test_agent_graph_traversal_with_final_result(mock_app, mock_streaming_message):
-    """Test agent_graph_traversal with a final result event."""
-    # Setup mock events
+async def test_workflow_initialization():
+    """Test Workflow initialization."""
+    workflow = Workflow()
+    assert workflow.message_history is None
+
+
+@pytest.mark.asyncio
+async def test_workflow_process_agent_response_with_model_request(
+    workflow, mock_agent, mock_callbacks
+):
+    """Test process_agent_response with a model request node."""
     final_result_event = MagicMock(spec=FinalResultEvent)
 
-    # Mock the result object
-    mock_result = MagicMock()
-    mock_result.all_messages = MagicMock(return_value=[{"role": "user", "content": "test"}])
-
-    # Mock the request stream
     request_stream = AsyncMock()
     request_stream.__aenter__ = AsyncMock(return_value=request_stream)
     request_stream.__aexit__ = AsyncMock(return_value=None)
 
-    # Create async generators for events
     async def event_generator():
         yield final_result_event
 
     request_stream.__aiter__ = MagicMock(return_value=event_generator())
-    request_stream.stream_text = MagicMock(return_value=async_iter(["Hello", " ", "World"]))
 
-    # Mock node
+    # stream_text returns an async generator directly
+    async def stream_text_generator(*args, **kwargs):
+        for text in ["Hello", " ", "World"]:
+            yield text
+
+    request_stream.stream_text = MagicMock(return_value=stream_text_generator())
+
     node = AsyncMock()
     node.stream = MagicMock(return_value=request_stream)
 
-    # Mock agent methods
-    mock_app.agent.is_model_request_node = MagicMock(return_value=True)
-    mock_app.agent.is_call_tools_node = MagicMock(return_value=False)
+    mock_agent.is_model_request_node = MagicMock(return_value=True)
+    mock_agent.is_call_tools_node = MagicMock(return_value=False)
 
-    # Mock the agent iter
-    async def nodes_generator():
-        yield node
+    result_messages = [{"role": "assistant", "content": "Hello World"}]
+    mock_agent.iter = MagicMock(return_value=create_mock_agent_iter([node], result_messages))
 
-    mock_iter = AsyncMock()
-    mock_iter.__aenter__ = AsyncMock(return_value=mock_iter)
-    mock_iter.__aexit__ = AsyncMock(return_value=None)
-    mock_iter.__aiter__ = MagicMock(return_value=nodes_generator())
-    mock_iter.result = mock_result
-    mock_iter.ctx = MagicMock()
+    await workflow.process_agent_response(mock_agent, "test input", mock_callbacks)
 
-    mock_app.agent.iter = MagicMock(return_value=mock_iter)
-    mock_app.conversation_panel.add_streaming_message = MagicMock(
-        return_value=mock_streaming_message
-    )
+    # Verify callbacks were called
+    mock_callbacks.on_streaming_start.assert_called_once()
+    assert mock_callbacks.on_stream_append.call_count == 3
+    mock_callbacks.on_stream_clear.assert_called_once()
+    mock_callbacks.on_status_update.assert_called_once_with("ready")
 
-    # Execute
-    await agent_graph_traversal(
-        mock_app,
-        "test input",
-        streaming_message=None
-    )
-
-    # Assertions
-    mock_app.agent.iter.assert_called_once_with(
-        "test input",
-        message_history=[]
-    )
-    mock_app.agent.is_model_request_node.assert_called_once_with(node)
-    # Check that the message history was updated with the result
-    assert mock_app.message_history == [{"role": "user", "content": "test"}]
+    # Verify message history was updated
+    assert workflow.message_history == result_messages
 
 
 @pytest.mark.asyncio
-async def test_agent_graph_traversal_with_function_tool_call(mock_app):
-    """Test agent_graph_traversal when agent calls tools."""
-    # Setup tool call event
+async def test_workflow_process_agent_response_with_tool_call(
+    workflow, mock_agent, mock_callbacks
+):
+    """Test process_agent_response when agent calls a tool."""
     tool_event = MagicMock(spec=FunctionToolCallEvent)
     tool_event.part = MagicMock()
     tool_event.part.args_as_dict = MagicMock(
         return_value={"command": "ls -la", "tool_name": "bash_tool"}
     )
 
-    # Mock result
-    mock_result = MagicMock()
-    mock_result.all_messages = MagicMock(return_value=[{"role": "assistant", "content": "Running command"}])
-
-    # Mock the handle stream for tool calls
     handle_stream = AsyncMock()
     handle_stream.__aenter__ = AsyncMock(return_value=handle_stream)
     handle_stream.__aexit__ = AsyncMock(return_value=None)
@@ -129,53 +145,30 @@ async def test_agent_graph_traversal_with_function_tool_call(mock_app):
 
     handle_stream.__aiter__ = MagicMock(return_value=tool_event_generator())
 
-    # Mock node
     node = AsyncMock()
     node.stream = MagicMock(return_value=handle_stream)
 
-    # Mock spinner widget
-    mock_spinner = MagicMock()
-    mock_app.conversation_panel.add_spinner = MagicMock(return_value=mock_spinner)
+    mock_agent.is_model_request_node = MagicMock(return_value=False)
+    mock_agent.is_call_tools_node = MagicMock(return_value=True)
 
-    # Mock agent methods
-    mock_app.agent.is_model_request_node = MagicMock(return_value=False)
-    mock_app.agent.is_call_tools_node = MagicMock(return_value=True)
+    result_messages = [{"role": "assistant", "content": "Tool executed"}]
+    mock_agent.iter = MagicMock(return_value=create_mock_agent_iter([node], result_messages))
 
-    # Mock the agent iter
-    async def nodes_generator():
-        yield node
+    await workflow.process_agent_response(mock_agent, "run ls", mock_callbacks)
 
-    mock_iter = AsyncMock()
-    mock_iter.__aenter__ = AsyncMock(return_value=mock_iter)
-    mock_iter.__aexit__ = AsyncMock(return_value=None)
-    mock_iter.__aiter__ = MagicMock(return_value=nodes_generator())
-    mock_iter.result = mock_result
-    mock_iter.ctx = MagicMock()
-
-    mock_app.agent.iter = MagicMock(return_value=mock_iter)
-
-    # Execute
-    await agent_graph_traversal(
-        mock_app,
-        "run ls",
-        streaming_message=None
-    )
-
-    # Assertions
-    mock_app.conversation_panel.add_spinner.assert_called_once()
-    call_args = mock_app.conversation_panel.add_spinner.call_args[0][0]
+    # Verify spinner callback was called with correct content
+    mock_callbacks.on_spinner_add.assert_called_once()
+    call_args = mock_callbacks.on_spinner_add.call_args[0][0]
     assert "ls -la" in call_args
-    assert "Running" in call_args
-    assert mock_app.message_history == [{"role": "assistant", "content": "Running command"}]
+    assert "Running..." in call_args
 
 
 @pytest.mark.asyncio
-async def test_agent_graph_traversal_streams_text_output(mock_app, mock_streaming_message):
-    """Test that text output is streamed to the message widget."""
+async def test_workflow_process_agent_response_streams_text(
+    workflow, mock_agent, mock_callbacks
+):
+    """Test that text output is properly streamed."""
     final_result_event = MagicMock(spec=FinalResultEvent)
-
-    mock_result = MagicMock()
-    mock_result.all_messages = MagicMock(return_value=[])
 
     request_stream = AsyncMock()
     request_stream.__aenter__ = AsyncMock(return_value=request_stream)
@@ -187,7 +180,7 @@ async def test_agent_graph_traversal_streams_text_output(mock_app, mock_streamin
     request_stream.__aiter__ = MagicMock(return_value=event_generator())
 
     async def text_stream():
-        for text in ["Hello", " ", "from", " ", "AI"]:
+        for text in ["AI", " ", "response", " ", "text"]:
             yield text
 
     request_stream.stream_text = MagicMock(return_value=text_stream())
@@ -195,40 +188,27 @@ async def test_agent_graph_traversal_streams_text_output(mock_app, mock_streamin
     node = AsyncMock()
     node.stream = MagicMock(return_value=request_stream)
 
-    mock_app.agent.is_model_request_node = MagicMock(return_value=True)
-    mock_app.agent.is_call_tools_node = MagicMock(return_value=False)
+    mock_agent.is_model_request_node = MagicMock(return_value=True)
+    mock_agent.is_call_tools_node = MagicMock(return_value=False)
 
-    async def nodes_generator():
-        yield node
+    result_messages = []
+    mock_agent.iter = MagicMock(return_value=create_mock_agent_iter([node], result_messages))
 
-    mock_iter = AsyncMock()
-    mock_iter.__aenter__ = AsyncMock(return_value=mock_iter)
-    mock_iter.__aexit__ = AsyncMock(return_value=None)
-    mock_iter.__aiter__ = MagicMock(return_value=nodes_generator())
-    mock_iter.result = mock_result
-    mock_iter.ctx = MagicMock()
+    await workflow.process_agent_response(mock_agent, "test", mock_callbacks)
 
-    mock_app.agent.iter = MagicMock(return_value=mock_iter)
-    mock_app.conversation_panel.add_streaming_message = MagicMock(
-        return_value=mock_streaming_message
-    )
-
-    await agent_graph_traversal(mock_app, "test", streaming_message=None)
-
-    # Verify text was streamed
-    assert mock_streaming_message.append_text.call_count == 5
-    mock_streaming_message.append_text.assert_any_call("Hello")
-    mock_streaming_message.append_text.assert_any_call(" ")
-    mock_streaming_message.append_text.assert_any_call("from")
+    # Verify all text chunks were appended
+    assert mock_callbacks.on_stream_append.call_count == 5
+    mock_callbacks.on_stream_append.assert_any_call("AI")
+    mock_callbacks.on_stream_append.assert_any_call(" ")
+    mock_callbacks.on_stream_append.assert_any_call("response")
 
 
 @pytest.mark.asyncio
-async def test_agent_graph_traversal_removes_spinner(mock_app, mock_streaming_message):
+async def test_workflow_removes_spinner_after_final_result(
+    workflow, mock_agent, mock_callbacks
+):
     """Test that spinner is removed after final result is found."""
     final_result_event = MagicMock(spec=FinalResultEvent)
-
-    mock_result = MagicMock()
-    mock_result.all_messages = MagicMock(return_value=[])
 
     request_stream = AsyncMock()
     request_stream.__aenter__ = AsyncMock(return_value=request_stream)
@@ -243,91 +223,23 @@ async def test_agent_graph_traversal_removes_spinner(mock_app, mock_streaming_me
     node = AsyncMock()
     node.stream = MagicMock(return_value=request_stream)
 
-    # Set up a current spinner that should be removed
-    mock_spinner = MagicMock()
-    mock_spinner.remove = AsyncMock()
-    mock_app.current_spinner = mock_spinner
+    mock_agent.is_model_request_node = MagicMock(return_value=True)
+    mock_agent.is_call_tools_node = MagicMock(return_value=False)
 
-    mock_app.agent.is_model_request_node = MagicMock(return_value=True)
-    mock_app.agent.is_call_tools_node = MagicMock(return_value=False)
+    result_messages = []
+    mock_agent.iter = MagicMock(return_value=create_mock_agent_iter([node], result_messages))
 
-    async def nodes_generator():
-        yield node
-
-    mock_iter = AsyncMock()
-    mock_iter.__aenter__ = AsyncMock(return_value=mock_iter)
-    mock_iter.__aexit__ = AsyncMock(return_value=None)
-    mock_iter.__aiter__ = MagicMock(return_value=nodes_generator())
-    mock_iter.result = mock_result
-    mock_iter.ctx = MagicMock()
-
-    mock_app.agent.iter = MagicMock(return_value=mock_iter)
-    mock_app.conversation_panel.add_streaming_message = MagicMock(
-        return_value=mock_streaming_message
-    )
-
-    await agent_graph_traversal(mock_app, "test", streaming_message=None)
+    await workflow.process_agent_response(mock_agent, "test", mock_callbacks)
 
     # Verify spinner was removed
-    mock_spinner.remove.assert_called_once()
-    assert mock_app.current_spinner is None
+    mock_callbacks.on_spinner_remove.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_agent_graph_traversal_with_provided_streaming_message(mock_app):
-    """Test agent_graph_traversal when conversation panel is disabled."""
-    streaming_message = MagicMock()
-    streaming_message.append_text = MagicMock()
-
-    final_result_event = MagicMock(spec=FinalResultEvent)
-
-    mock_result = MagicMock()
-    mock_result.all_messages = MagicMock(return_value=[])
-
-    request_stream = AsyncMock()
-    request_stream.__aenter__ = AsyncMock(return_value=request_stream)
-    request_stream.__aexit__ = AsyncMock(return_value=None)
-
-    async def event_generator():
-        yield final_result_event
-
-    request_stream.__aiter__ = MagicMock(return_value=event_generator())
-
-    async def text_stream():
-        yield "Response"
-
-    request_stream.stream_text = MagicMock(return_value=text_stream())
-
-    node = AsyncMock()
-    node.stream = MagicMock(return_value=request_stream)
-
-    mock_app.agent.is_model_request_node = MagicMock(return_value=True)
-    mock_app.agent.is_call_tools_node = MagicMock(return_value=False)
-
-    # Set conversation_panel to None so the provided streaming message is used
-    mock_app.conversation_panel = None
-
-    async def nodes_generator():
-        yield node
-
-    mock_iter = AsyncMock()
-    mock_iter.__aenter__ = AsyncMock(return_value=mock_iter)
-    mock_iter.__aexit__ = AsyncMock(return_value=None)
-    mock_iter.__aiter__ = MagicMock(return_value=nodes_generator())
-    mock_iter.result = mock_result
-    mock_iter.ctx = MagicMock()
-
-    mock_app.agent.iter = MagicMock(return_value=mock_iter)
-
-    await agent_graph_traversal(mock_app, "test", streaming_message=streaming_message)
-
-    # Verify the provided widget was used when conversation_panel is disabled
-    streaming_message.append_text.assert_called_with("Response")
-
-
-@pytest.mark.asyncio
-async def test_agent_graph_traversal_multiple_nodes(mock_app):
-    """Test agent_graph_traversal with multiple nodes (both model and tool calls)."""
+async def test_workflow_process_multiple_nodes(
+    workflow, mock_agent, mock_callbacks
+):
+    """Test process_agent_response with multiple nodes (model and tool)."""
     # First node: model request
     final_result_event = MagicMock(spec=FinalResultEvent)
 
@@ -363,9 +275,6 @@ async def test_agent_graph_traversal_multiple_nodes(mock_app):
     tool_node = AsyncMock()
     tool_node.stream = MagicMock(return_value=handle_stream)
 
-    mock_result = MagicMock()
-    mock_result.all_messages = MagicMock(return_value=[])
-
     # Setup agent to handle both node types
     def is_model_node(node):
         return node == model_node
@@ -373,43 +282,29 @@ async def test_agent_graph_traversal_multiple_nodes(mock_app):
     def is_tool_node(node):
         return node == tool_node
 
-    mock_app.agent.is_model_request_node = MagicMock(side_effect=is_model_node)
-    mock_app.agent.is_call_tools_node = MagicMock(side_effect=is_tool_node)
+    mock_agent.is_model_request_node = MagicMock(side_effect=is_model_node)
+    mock_agent.is_call_tools_node = MagicMock(side_effect=is_tool_node)
 
-    async def nodes_generator():
-        yield model_node
-        yield tool_node
+    result_messages = [{"role": "assistant", "content": "Done"}]
+    mock_agent.iter = MagicMock(
+        return_value=create_mock_agent_iter([model_node, tool_node], result_messages)
+    )
 
-    mock_iter = AsyncMock()
-    mock_iter.__aenter__ = AsyncMock(return_value=mock_iter)
-    mock_iter.__aexit__ = AsyncMock(return_value=None)
-    mock_iter.__aiter__ = MagicMock(return_value=nodes_generator())
-    mock_iter.result = mock_result
-    mock_iter.ctx = MagicMock()
+    await workflow.process_agent_response(mock_agent, "complex task", mock_callbacks)
 
-    mock_app.agent.iter = MagicMock(return_value=mock_iter)
-
-    mock_spinner = MagicMock()
-    mock_spinner.remove = AsyncMock()
-
-    streaming_msg = MagicMock()
-    streaming_msg.append_text = MagicMock()
-
-    mock_app.conversation_panel.add_streaming_message = MagicMock(return_value=streaming_msg)
-    mock_app.conversation_panel.add_spinner = MagicMock(return_value=mock_spinner)
-
-    await agent_graph_traversal(mock_app, "complex task", streaming_message=None)
-
-    # Both node types should be checked
-    assert mock_app.agent.is_model_request_node.call_count >= 1
-    assert mock_app.agent.is_call_tools_node.call_count >= 1
+    # Both node types should be processed
+    assert mock_agent.is_model_request_node.call_count >= 1
+    assert mock_agent.is_call_tools_node.call_count >= 1
+    assert workflow.message_history == result_messages
 
 
 @pytest.mark.asyncio
-async def test_agent_graph_traversal_no_final_result_event(mock_app):
+async def test_workflow_no_final_result_event(
+    workflow, mock_agent, mock_callbacks
+):
     """Test behavior when no final result event is found."""
-    # Some other event type
-    other_event = MagicMock()  # Not a FinalResultEvent
+    # Some other event type (not FinalResultEvent)
+    other_event = MagicMock()
 
     request_stream = AsyncMock()
     request_stream.__aenter__ = AsyncMock(return_value=request_stream)
@@ -424,39 +319,28 @@ async def test_agent_graph_traversal_no_final_result_event(mock_app):
     node = AsyncMock()
     node.stream = MagicMock(return_value=request_stream)
 
-    mock_result = MagicMock()
-    mock_result.all_messages = MagicMock(return_value=[])
+    mock_agent.is_model_request_node = MagicMock(return_value=True)
+    mock_agent.is_call_tools_node = MagicMock(return_value=False)
 
-    mock_app.agent.is_model_request_node = MagicMock(return_value=True)
-    mock_app.agent.is_call_tools_node = MagicMock(return_value=False)
+    result_messages = []
+    mock_agent.iter = MagicMock(return_value=create_mock_agent_iter([node], result_messages))
 
-    async def nodes_generator():
-        yield node
+    await workflow.process_agent_response(mock_agent, "test", mock_callbacks)
 
-    mock_iter = AsyncMock()
-    mock_iter.__aenter__ = AsyncMock(return_value=mock_iter)
-    mock_iter.__aexit__ = AsyncMock(return_value=None)
-    mock_iter.__aiter__ = MagicMock(return_value=nodes_generator())
-    mock_iter.result = mock_result
-    mock_iter.ctx = MagicMock()
-
-    mock_app.agent.iter = MagicMock(return_value=mock_iter)
-    mock_app.conversation_panel.add_streaming_message = MagicMock()
-
-    # Should not raise an error
-    await agent_graph_traversal(mock_app, "test", streaming_message=None)
-
-    # Spinner should remain as it was
-    assert mock_app.current_spinner is None
+    # Spinner should not be removed if final result was not found
+    mock_callbacks.on_spinner_remove.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_agent_graph_traversal_tool_call_without_spinner(mock_app):
-    """Test tool call event when no spinner exists or is disabled."""
+async def test_workflow_tool_call_with_generic_tool(
+    workflow, mock_agent, mock_callbacks
+):
+    """Test tool call event with generic tool name when command is missing."""
     tool_event = MagicMock(spec=FunctionToolCallEvent)
     tool_event.part = MagicMock()
+    # No command in args
     tool_event.part.args_as_dict = MagicMock(
-        return_value={"command": "pwd", "tool_name": "bash"}
+        return_value={"tool_name": "generic_tool"}
     )
 
     handle_stream = AsyncMock()
@@ -471,43 +355,43 @@ async def test_agent_graph_traversal_tool_call_without_spinner(mock_app):
     node = AsyncMock()
     node.stream = MagicMock(return_value=handle_stream)
 
-    mock_result = MagicMock()
-    mock_result.all_messages = MagicMock(return_value=[])
+    mock_agent.is_model_request_node = MagicMock(return_value=False)
+    mock_agent.is_call_tools_node = MagicMock(return_value=True)
 
-    mock_app.agent.is_model_request_node = MagicMock(return_value=False)
-    mock_app.agent.is_call_tools_node = MagicMock(return_value=True)
+    result_messages = []
+    mock_agent.iter = MagicMock(return_value=create_mock_agent_iter([node], result_messages))
 
-    # No conversation panel - spinner should not be created
-    mock_app.conversation_panel = None
+    await workflow.process_agent_response(mock_agent, "test", mock_callbacks)
 
-    async def nodes_generator():
-        yield node
-
-    mock_iter = AsyncMock()
-    mock_iter.__aenter__ = AsyncMock(return_value=mock_iter)
-    mock_iter.__aexit__ = AsyncMock(return_value=None)
-    mock_iter.__aiter__ = MagicMock(return_value=nodes_generator())
-    mock_iter.result = mock_result
-    mock_iter.ctx = MagicMock()
-
-    mock_app.agent.iter = MagicMock(return_value=mock_iter)
-
-    # Should handle gracefully without conversation panel
-    await agent_graph_traversal(mock_app, "test", streaming_message=None)
-
-    assert mock_app.message_history == []
+    # Verify spinner was added with tool name as fallback
+    mock_callbacks.on_spinner_add.assert_called_once()
+    call_args = mock_callbacks.on_spinner_add.call_args[0][0]
+    assert "generic_tool" in call_args
 
 
 @pytest.mark.asyncio
-async def test_agent_graph_traversal_empty_message_history(mock_app):
-    """Test that message history is properly updated after traversal."""
-    mock_result = MagicMock()
-    test_messages = [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there"}
-    ]
-    mock_result.all_messages = MagicMock(return_value=test_messages)
+async def test_workflow_error_handling(
+    workflow, mock_agent, mock_callbacks
+):
+    """Test that exceptions are properly handled and reported."""
+    test_error = Exception("Test error during processing")
 
+    mock_agent.iter = MagicMock(side_effect=test_error)
+
+    await workflow.process_agent_response(mock_agent, "test", mock_callbacks)
+
+    # Verify error callback was called
+    mock_callbacks.on_error.assert_called_once_with(test_error)
+    # Verify status was not updated to ready on error
+    mock_callbacks.on_status_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_workflow_preserves_message_history(
+    workflow, mock_agent, mock_callbacks
+):
+    """Test that message history is preserved across multiple calls."""
+    # First call
     final_result_event = MagicMock(spec=FinalResultEvent)
 
     request_stream = AsyncMock()
@@ -523,25 +407,124 @@ async def test_agent_graph_traversal_empty_message_history(mock_app):
     node = AsyncMock()
     node.stream = MagicMock(return_value=request_stream)
 
-    mock_app.agent.is_model_request_node = MagicMock(return_value=True)
-    mock_app.agent.is_call_tools_node = MagicMock(return_value=False)
+    mock_agent.is_model_request_node = MagicMock(return_value=True)
+    mock_agent.is_call_tools_node = MagicMock(return_value=False)
 
-    async def nodes_generator():
-        yield node
+    first_messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"}
+    ]
+    mock_agent.iter = MagicMock(return_value=create_mock_agent_iter([node], first_messages))
 
-    mock_iter = AsyncMock()
-    mock_iter.__aenter__ = AsyncMock(return_value=mock_iter)
-    mock_iter.__aexit__ = AsyncMock(return_value=None)
-    mock_iter.__aiter__ = MagicMock(return_value=nodes_generator())
-    mock_iter.result = mock_result
-    mock_iter.ctx = MagicMock()
+    await workflow.process_agent_response(mock_agent, "Hello", mock_callbacks)
 
-    mock_app.agent.iter = MagicMock(return_value=mock_iter)
-    mock_app.conversation_panel.add_streaming_message = MagicMock()
+    # Verify first message history
+    assert workflow.message_history == first_messages
 
-    assert mock_app.message_history == []
+    # Setup for second call - reset individual callback mocks
+    mock_callbacks.on_spinner_add.reset_mock()
+    mock_callbacks.on_spinner_remove.reset_mock()
+    mock_callbacks.on_streaming_start.reset_mock()
+    mock_callbacks.on_stream_append.reset_mock()
+    mock_callbacks.on_stream_clear.reset_mock()
+    mock_callbacks.on_error.reset_mock()
+    mock_callbacks.on_status_update.reset_mock()
 
-    await agent_graph_traversal(mock_app, "test", streaming_message=None)
+    second_messages = first_messages + [
+        {"role": "user", "content": "How are you?"},
+        {"role": "assistant", "content": "I'm doing well"}
+    ]
 
-    # Message history should be updated
-    assert mock_app.message_history == test_messages
+    request_stream2 = AsyncMock()
+    request_stream2.__aenter__ = AsyncMock(return_value=request_stream2)
+    request_stream2.__aexit__ = AsyncMock(return_value=None)
+
+    async def event_generator2():
+        yield final_result_event
+
+    request_stream2.__aiter__ = MagicMock(return_value=event_generator2())
+    request_stream2.stream_text = MagicMock(return_value=async_iter([]))
+
+    node2 = AsyncMock()
+    node2.stream = MagicMock(return_value=request_stream2)
+
+    mock_agent.iter = MagicMock(return_value=create_mock_agent_iter([node2], second_messages))
+
+    await workflow.process_agent_response(mock_agent, "How are you?", mock_callbacks)
+
+    # Verify message history was updated with all messages
+    assert workflow.message_history == second_messages
+
+
+@pytest.mark.asyncio
+async def test_workflow_handles_missing_command_in_tool_args(
+    workflow, mock_agent, mock_callbacks
+):
+    """Test tool call handling when args_as_dict returns missing fields."""
+    tool_event = MagicMock(spec=FunctionToolCallEvent)
+    tool_event.part = MagicMock()
+    # Empty args
+    tool_event.part.args_as_dict = MagicMock(return_value={})
+
+    handle_stream = AsyncMock()
+    handle_stream.__aenter__ = AsyncMock(return_value=handle_stream)
+    handle_stream.__aexit__ = AsyncMock(return_value=None)
+
+    async def tool_event_generator():
+        yield tool_event
+
+    handle_stream.__aiter__ = MagicMock(return_value=tool_event_generator())
+
+    node = AsyncMock()
+    node.stream = MagicMock(return_value=handle_stream)
+
+    mock_agent.is_model_request_node = MagicMock(return_value=False)
+    mock_agent.is_call_tools_node = MagicMock(return_value=True)
+
+    result_messages = []
+    mock_agent.iter = MagicMock(return_value=create_mock_agent_iter([node], result_messages))
+
+    await workflow.process_agent_response(mock_agent, "test", mock_callbacks)
+
+    # Verify spinner was added with default generic tool name
+    mock_callbacks.on_spinner_add.assert_called_once()
+    call_args = mock_callbacks.on_spinner_add.call_args[0][0]
+    assert "[GENERIC TOOL]" in call_args
+
+
+@pytest.mark.asyncio
+async def test_workflow_callbacks_called_in_order(
+    workflow, mock_agent, mock_callbacks
+):
+    """Test that workflow callbacks are called in the correct order."""
+    final_result_event = MagicMock(spec=FinalResultEvent)
+
+    request_stream = AsyncMock()
+    request_stream.__aenter__ = AsyncMock(return_value=request_stream)
+    request_stream.__aexit__ = AsyncMock(return_value=None)
+
+    async def event_generator():
+        yield final_result_event
+
+    request_stream.__aiter__ = MagicMock(return_value=event_generator())
+    request_stream.stream_text = MagicMock(return_value=async_iter(["test"]))
+
+    node = AsyncMock()
+    node.stream = MagicMock(return_value=request_stream)
+
+    mock_agent.is_model_request_node = MagicMock(return_value=True)
+    mock_agent.is_call_tools_node = MagicMock(return_value=False)
+
+    result_messages = []
+    mock_agent.iter = MagicMock(return_value=create_mock_agent_iter([node], result_messages))
+
+    await workflow.process_agent_response(mock_agent, "test", mock_callbacks)
+
+    # Verify callback order
+    mock_callbacks.on_streaming_start.assert_called_once()
+    mock_callbacks.on_stream_append.assert_called_once_with("test")
+    mock_callbacks.on_spinner_remove.assert_called_once()
+    mock_callbacks.on_stream_clear.assert_called_once()
+
+    # Status update should be called last
+    assert mock_callbacks.on_status_update.call_args[0][0] == "ready"

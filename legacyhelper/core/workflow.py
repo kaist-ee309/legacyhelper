@@ -1,6 +1,8 @@
-from pydantic_ai import Agent, FinalResultEvent, FunctionToolCallEvent
-from typing import Optional, Callable, Awaitable, TYPE_CHECKING
+"""Workflow module for managing agent interaction and message processing."""
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
+
+from pydantic_ai import Agent, FinalResultEvent, FunctionToolCallEvent
 
 if TYPE_CHECKING:
     from legacyhelper.ui.widgets import StreamingMessageWidget
@@ -55,8 +57,8 @@ class Workflow:
             # Update status
             callbacks.on_status_update("ready")
 
-        except Exception as e:
-            await callbacks.on_error(e)
+        except Exception as exc:  # pylint: disable=broad-except
+            await callbacks.on_error(exc)
 
     async def _process_node(
         self, agent: Agent, node, result, callbacks: WorkflowCallbacks

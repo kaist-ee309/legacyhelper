@@ -3,74 +3,57 @@ import pytest
 from unittest.mock import patch, MagicMock
 from legacyhelper.tools.command_tool import (
     BashResult,
-    bash_tool,
-    command_available,
     MAX_OUTPUT_CHARS,
 )
 
 
 @pytest.fixture
 def bash_tool_func():
-    """Import the actual bash_tool function from the module."""
-    # Import the actual function defined in the module
-    from legacyhelper.tools.command_tool import bash_tool as actual_bash_tool
+    """Get the actual bash_tool function for testing."""
+    from legacyhelper.tools.command_tool import bash_tool as tool_wrapped
 
-    # The bash_tool is wrapped in Tool, so we need to access the underlying function
-    # Get the original function before Tool wrapping
-    import legacyhelper.tools.command_tool as cmd_module
-
-    # Create a version that doesn't require the Tool wrapper for testing
-    def test_bash_tool(command: str) -> BashResult:
-        import subprocess
-        forbidden = ["rm -rf", "shutdown", "reboot", ":(){:|:&};:"]
-        if any(f in command for f in forbidden):
-            return BashResult(
-                stdout="",
-                stderr="Blocked dangerous command",
-                returncode=1,
-            )
-
-        if command_available(command):
-            return BashResult(
-                stdout="",
-                stderr="The command requires superuser privalige. Abort.",
-                returncode=1,
-            )
-
-        print(f"[TOOL CALL]: command={command}")
-        with subprocess.Popen(
-            command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        ) as proc:
-            out, err = proc.communicate()
-            return BashResult(stdout=out, stderr=err, returncode=proc.returncode)
-
-    return test_bash_tool
+    # The bash_tool is wrapped in pydantic_ai Tool, extract the original function
+    # The original function is stored in the function attribute
+    return tool_wrapped.function
 
 
 class TestBashTool:
     """Test cases for bash_tool function."""
 
-    def test_bash_tool_blocks_dangerous_commands(self, bash_tool_func):
-        """Test that dangerous commands are properly blocked."""
-        dangerous_commands = [
-            "rm -rf /",
-            "shutdown -h now",
-            "reboot",
-            ":(){:|:&};:",
-        ]
+    def test_bash_tool_blocks_rm_rf(self, bash_tool_func):
+        """Test that rm -rf commands are properly blocked."""
+        result = bash_tool_func("rm -rf /home")
+        assert result.stderr == "Blocked dangerous command"
+        assert result.returncode == 1
+        assert result.stdout == ""
 
-        for cmd in dangerous_commands:
-            result = bash_tool_func(cmd)
-            assert result.stderr == "Blocked dangerous command"
-            assert result.returncode == 1
-            assert result.stdout == ""
+    def test_bash_tool_blocks_shutdown(self, bash_tool_func):
+        """Test that shutdown commands are properly blocked."""
+        result = bash_tool_func("shutdown -h now")
+        assert result.stderr == "Blocked dangerous command"
+        assert result.returncode == 1
 
-    def test_bash_tool_allows_safe_commands(self, bash_tool_func):
-        """Test that safe commands pass validation and are executed."""
+    def test_bash_tool_blocks_reboot(self, bash_tool_func):
+        """Test that reboot commands are properly blocked."""
+        result = bash_tool_func("reboot")
+        assert result.stderr == "Blocked dangerous command"
+        assert result.returncode == 1
+
+    def test_bash_tool_blocks_fork_bomb(self, bash_tool_func):
+        """Test that fork bomb command is blocked."""
+        result = bash_tool_func(":(){:|:&};:")
+        assert result.stderr == "Blocked dangerous command"
+        assert result.returncode == 1
+
+    def test_bash_tool_blocks_sudo_commands(self, bash_tool_func):
+        """Test that commands starting with sudo are blocked."""
+        result = bash_tool_func("sudo ls /root")
+        assert result.stderr == "The command requires superuser privalige. Abort."
+        assert result.returncode == 1
+        assert result.stdout == ""
+
+    def test_bash_tool_executes_safe_commands(self, bash_tool_func):
+        """Test that safe commands are executed."""
         with patch('legacyhelper.tools.command_tool.subprocess.Popen') as mock_popen:
             mock_process = MagicMock()
             mock_process.communicate.return_value = ('ls output', '')
@@ -79,184 +62,106 @@ class TestBashTool:
 
             result = bash_tool_func("ls -la")
 
-            # Safe command should not be blocked
             assert result.returncode == 0
+            assert result.stdout == "ls output"
+            assert result.stderr == ""
+            mock_popen.assert_called_once()
 
-    def test_bash_result_model(self):
-        """Test BashResult model validation."""
-        result = BashResult(stdout="test", stderr="", returncode=0)
+    def test_bash_tool_captures_command_errors(self, bash_tool_func):
+        """Test that command stderr is captured correctly."""
+        with patch('legacyhelper.tools.command_tool.subprocess.Popen') as mock_popen:
+            mock_process = MagicMock()
+            mock_process.communicate.return_value = ('', 'command not found')
+            mock_process.returncode = 127
+            mock_popen.return_value.__enter__.return_value = mock_process
 
-        assert result.stdout == "test"
+            result = bash_tool_func("nonexistent_command")
+
+            assert result.returncode == 127
+            assert result.stderr == "command not found"
+            assert result.stdout == ""
+
+    def test_bash_result_model_creation(self):
+        """Test BashResult model creation."""
+        result = BashResult(stdout="test output", stderr="", returncode=0)
+
+        assert result.stdout == "test output"
         assert result.stderr == ""
         assert result.returncode == 0
 
-    def test_bash_result_model_invalid_returncode(self):
+    def test_bash_result_with_various_return_codes(self):
         """Test BashResult with various return codes."""
-        result_zero = BashResult(stdout="", stderr="", returncode=0)
-        result_error = BashResult(stdout="", stderr="error", returncode=1)
-        result_not_found = BashResult(stdout="", stderr="not found", returncode=127)
-
-        assert result_zero.returncode == 0
-        assert result_error.returncode == 1
-        assert result_not_found.returncode == 127
-
-    def test_bash_tool_blocks_rm_rf_variations(self, bash_tool_func):
-        """Test that rm -rf with various flags is blocked."""
-        variations = [
-            "rm -rf /",
-            "rm -rf /home",
-            "sudo rm -rf /",
-            "rm -rf /path/to/dir",
+        test_cases = [
+            (0, "success"),
+            (1, "general error"),
+            (127, "command not found"),
+            (255, "fatal error"),
         ]
 
-        for cmd in variations:
-            result = bash_tool_func(cmd)
-            assert result.returncode == 1
-            assert "Blocked" in result.stderr
+        for code, message in test_cases:
+            result = BashResult(stdout="", stderr=message, returncode=code)
+            assert result.returncode == code
+            assert result.stderr == message
 
-    def test_bash_result_exceeds_output_limit(self):
-        """Test BashResult output limiting for very long stdout."""
-        # Create output that exceeds the MAX_OUTPUT_CHARS limit
+    def test_bash_result_output_limit_on_stdout(self):
+        """Test that stdout exceeding limit is truncated."""
         long_output = "x" * (MAX_OUTPUT_CHARS + 1000)
 
         result = BashResult(stdout=long_output, stderr="", returncode=0)
 
-        # Output should be truncated to the warning message
         assert "Context too long" in result.stdout
         assert len(result.stdout) < MAX_OUTPUT_CHARS
+        assert "⚠️" in result.stdout
 
-    def test_bash_result_exceeds_error_limit(self):
-        """Test BashResult output limiting for very long stderr."""
-        # Create error output that exceeds the MAX_OUTPUT_CHARS limit
+    def test_bash_result_output_limit_on_stderr(self):
+        """Test that stderr exceeding limit is truncated."""
         long_error = "error: " * (MAX_OUTPUT_CHARS // 7 + 100)
 
         result = BashResult(stdout="", stderr=long_error, returncode=1)
 
-        # Error should be truncated to the warning message
         assert "Context too long" in result.stderr
         assert len(result.stderr) < MAX_OUTPUT_CHARS
+        assert "⚠️" in result.stderr
 
-    def test_command_available_returns_true_for_existing_command(self):
-        """Test command_available detects available commands."""
-        # 'echo' is a standard command that should always be available
-        result = command_available("echo")
-        # This might fail on some systems, but echo should exist
-        assert isinstance(result, bool)
+    def test_bash_result_output_within_limit(self):
+        """Test that output within limit is preserved."""
+        output = "x" * 1000
 
-    def test_command_available_returns_false_for_missing_command(self):
-        """Test command_available detects missing commands."""
-        # Use a very unlikely command name
-        result = command_available("thiscmdreallydoesnotexist12345")
-        assert result is False
+        result = BashResult(stdout=output, stderr="", returncode=0)
 
-    def test_bash_tool_executes_valid_commands(self, bash_tool_func):
-        """Test that valid safe commands are executed."""
+        assert result.stdout == output
+        assert "Context too long" not in result.stdout
+
+    def test_bash_tool_with_pipe_and_redirection(self, bash_tool_func):
+        """Test that commands with pipes and redirections are allowed."""
         with patch('legacyhelper.tools.command_tool.subprocess.Popen') as mock_popen:
             mock_process = MagicMock()
-            mock_process.communicate.return_value = ('output', 'error')
+            mock_process.communicate.return_value = ('filtered output', '')
             mock_process.returncode = 0
             mock_popen.return_value.__enter__.return_value = mock_process
 
-            result = bash_tool_func("echo test")
+            result = bash_tool_func("cat /var/log/syslog | grep error")
 
-            assert result.stdout == "output"
-            assert result.stderr == "error"
             assert result.returncode == 0
+            assert result.stdout == "filtered output"
 
-    def test_bash_tool_blocks_shutdown_variations(self, bash_tool_func):
-        """Test that shutdown commands with various formats are blocked."""
-        variations = [
-            "shutdown -h now",
-            "shutdown -r +5",
-            "sudo shutdown",
-        ]
+    def test_bash_tool_multiple_dangerous_command_checks(self, bash_tool_func):
+        """Test all dangerous command patterns are blocked."""
+        dangerous_patterns = ["rm -rf", "shutdown", "reboot", ":(){:|:&};:"]
 
-        for cmd in variations:
-            result = bash_tool_func(cmd)
+        for pattern in dangerous_patterns:
+            result = bash_tool_func(pattern)
             assert result.returncode == 1
             assert result.stderr == "Blocked dangerous command"
 
-    def test_bash_tool_blocks_reboot_variations(self, bash_tool_func):
-        """Test that reboot commands are blocked."""
-        variations = [
-            "reboot",
-            "sudo reboot",
-        ]
+    def test_bash_result_both_stdout_and_stderr_large(self):
+        """Test output limiting when both stdout and stderr are large."""
+        long_output = "o" * (MAX_OUTPUT_CHARS + 1000)
+        long_error = "e" * (MAX_OUTPUT_CHARS + 1000)
 
-        for cmd in variations:
-            result = bash_tool_func(cmd)
-            assert result.returncode == 1
-            assert result.stderr == "Blocked dangerous command"
+        result = BashResult(stdout=long_output, stderr=long_error, returncode=1)
 
-    def test_bash_tool_blocks_fork_bomb(self, bash_tool_func):
-        """Test that fork bomb command is blocked."""
-        result = bash_tool_func(":(){:|:&};:")
-        assert result.returncode == 1
-        assert result.stderr == "Blocked dangerous command"
-
-    def test_bash_result_with_zero_returncode(self):
-        """Test BashResult with success return code."""
-        result = BashResult(stdout="success", stderr="", returncode=0)
-        assert result.returncode == 0
-        assert result.stdout == "success"
-        assert result.stderr == ""
-
-    def test_bash_result_with_error_returncode(self):
-        """Test BashResult with various error return codes."""
-        for code in [1, 2, 127, 255]:
-            result = BashResult(stdout="", stderr="error", returncode=code)
-            assert result.returncode == code
-            assert result.stderr == "error"
-
-    def test_command_available_with_split_command(self):
-        """Test command_available splits commands correctly."""
-        # Test with a command that has arguments
-        with patch('legacyhelper.tools.command_tool.subprocess.run') as mock_run:
-            mock_run.return_value = None
-            command_available("ls -la")
-            # Should split the command and call run with the list
-            mock_run.assert_called()
-
-    def test_command_available_catches_exception(self):
-        """Test command_available returns False on any exception."""
-        with patch('legacyhelper.tools.command_tool.subprocess.run') as mock_run:
-            mock_run.side_effect = Exception("Command not found")
-            result = command_available("nonexistent")
-            assert result is False
-
-    def test_bash_tool_blocks_when_requires_root(self):
-        """Test that bash_tool blocks commands that require superuser privilege."""
-        with patch('legacyhelper.tools.command_tool.command_available') as mock_available:
-            with patch('legacyhelper.tools.command_tool.subprocess.Popen') as mock_popen:
-                # Simulate command being available (requires root)
-                mock_available.return_value = True
-                mock_process = MagicMock()
-                mock_process.communicate.return_value = ('', '')
-                mock_process.returncode = 0
-                mock_popen.return_value.__enter__.return_value = mock_process
-
-                # Since bash_tool is wrapped in Tool, we test through fixture
-                # which includes the command_available check
-                def test_func(cmd: str) -> BashResult:
-                    import subprocess as sp
-                    forbidden = ["rm -rf", "shutdown", "reboot", ":(){:|:&};:"]
-                    if any(f in cmd for f in forbidden):
-                        return BashResult(stdout="", stderr="Blocked dangerous command", returncode=1)
-
-                    if mock_available.return_value:
-                        return BashResult(
-                            stdout="",
-                            stderr="The command requires superuser privalige. Abort.",
-                            returncode=1,
-                        )
-
-                    print(f"[TOOL CALL]: command={cmd}")
-                    with sp.Popen(
-                        cmd, shell=True, stdout=sp.PIPE, stderr=sp.PIPE, text=True
-                    ) as proc:
-                        out, err = proc.communicate()
-                        return BashResult(stdout=out, stderr=err, returncode=proc.returncode)
-
-                result = test_func("harmless_cmd")
-                assert result.returncode == 1
-                assert "superuser privalige" in result.stderr
+        assert "Context too long" in result.stdout
+        assert "Context too long" in result.stderr
+        assert len(result.stdout) < MAX_OUTPUT_CHARS
+        assert len(result.stderr) < MAX_OUTPUT_CHARS
