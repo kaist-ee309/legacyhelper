@@ -55,62 +55,6 @@ def parse_markdown_segments(text: str) -> list:
 
     return segments
 
-
-class CopyButton(Button):
-    """A small copy button for copying content."""
-
-    DEFAULT_CSS = """
-    CopyButton {
-        min-width: 5;
-        width: 5;
-        height: 3;
-        min-height: 3;
-        padding: 0 1;
-        margin: 0;
-        background: $surface;
-        border: solid $primary-darken-1;
-        content-align: center middle;
-    }
-
-    CopyButton:hover {
-        background: $primary;
-    }
-
-    CopyButton.-copied {
-        background: $success;
-        border: solid $success;
-    }
-    """
-
-    class Copied(Message):
-        """Message emitted when content is copied."""
-
-        def __init__(self, content: str) -> None:
-            self.content = content
-            super().__init__()
-
-    def __init__(self, content_to_copy: str, **kwargs) -> None:
-        """Initialize copy button.
-
-        Args:
-            content_to_copy: The content to copy when clicked
-        """
-        super().__init__("📋", **kwargs)
-        self.content_to_copy = content_to_copy
-
-    def on_click(self) -> None:
-        """Handle click to copy content."""
-        self.app.copy_to_clipboard(self.content_to_copy)
-        self.label = "✓"
-        self.add_class("-copied")
-        self.set_timer(1.5, self._reset_button)
-
-    def _reset_button(self) -> None:
-        """Reset button to original state."""
-        self.label = "📋"
-        self.remove_class("-copied")
-
-
 class MessageContent(Static):
     """Static widget for message content."""
 
