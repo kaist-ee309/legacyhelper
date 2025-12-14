@@ -3,8 +3,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from legacyhelper.tools.command_tool import (
-    get_current_system_log_linux,
-    get_previous_system_log_linux,
+    get_current_system_log,
+    get_previous_system_log,
     get_filtered_shell_history,
 )
 
@@ -16,10 +16,10 @@ class TestSystemLogs:
         """Test retrieving current system log successfully."""
         expected_output = "kernel: error occurred\nkernel: system error\n"
 
-        with patch('subprocess.run') as mock_run:
+        with patch('legacyhelper.tools.command_tool.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(stdout=expected_output)
 
-            result = get_current_system_log_linux()
+            result = get_current_system_log()
 
             assert result == expected_output
             mock_run.assert_called_once_with(
@@ -31,10 +31,10 @@ class TestSystemLogs:
 
     def test_get_current_system_log_exception(self):
         """Test handling of exception when retrieving current system log."""
-        with patch('subprocess.run') as mock_run:
+        with patch('legacyhelper.tools.command_tool.subprocess.run') as mock_run:
             mock_run.side_effect = Exception("journalctl not found")
 
-            result = get_current_system_log_linux()
+            result = get_current_system_log()
 
             assert "journalctl not found" in result
 
@@ -42,10 +42,10 @@ class TestSystemLogs:
         """Test retrieving previous system log successfully."""
         expected_output = "kernel: previous boot error\n"
 
-        with patch('subprocess.run') as mock_run:
+        with patch('legacyhelper.tools.command_tool.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(stdout=expected_output)
 
-            result = get_previous_system_log_linux()
+            result = get_previous_system_log()
 
             assert result == expected_output
             mock_run.assert_called_once_with(
@@ -57,10 +57,10 @@ class TestSystemLogs:
 
     def test_get_previous_system_log_exception(self):
         """Test handling of exception when retrieving previous system log."""
-        with patch('subprocess.run') as mock_run:
+        with patch('legacyhelper.tools.command_tool.subprocess.run') as mock_run:
             mock_run.side_effect = Exception("No previous boot log available")
 
-            result = get_previous_system_log_linux()
+            result = get_previous_system_log()
 
             assert "No previous boot log available" in result
 
@@ -214,3 +214,27 @@ class TestShellHistory:
             lines = result.strip().split('\n')
             # Should not have consecutive empty lines
             assert all(line.strip() != "" for line in lines if lines)
+
+    def test_get_filtered_shell_history_permission_error(self, temp_home):
+        """Test handling when history file cannot be read due to permissions."""
+        history_file = temp_home / ".bash_history"
+        history_file.write_text("cmd1\n")
+
+        with patch.dict('os.environ', {'SHELL': '/bin/bash'}):
+            with patch('builtins.open', side_effect=PermissionError("Permission denied")):
+                result = get_filtered_shell_history(ctx=None, n=10)
+
+                # Should return error message
+                assert result == "Error reading history file."
+
+    def test_get_filtered_shell_history_oserror(self, temp_home):
+        """Test handling when history file access fails with OSError."""
+        history_file = temp_home / ".bash_history"
+        history_file.write_text("cmd1\n")
+
+        with patch.dict('os.environ', {'SHELL': '/bin/bash'}):
+            with patch('builtins.open', side_effect=OSError("File error")):
+                result = get_filtered_shell_history(ctx=None, n=10)
+
+                # Should return error message
+                assert result == "Error reading history file."
