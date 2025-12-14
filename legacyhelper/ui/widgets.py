@@ -1,12 +1,15 @@
 """Custom widgets for LegacyHelper TUI."""
 import re
+import logging
 from typing import Optional
+import pyperclip
 from textual.widgets import Static, Button, Label
 from textual.containers import Container, Horizontal
 from textual.app import ComposeResult
-from textual.message import Message
 from rich.syntax import Syntax
 from rich.markdown import Markdown
+
+logger = logging.getLogger(__name__)
 
 
 def parse_markdown_segments(text: str) -> list:
@@ -54,6 +57,68 @@ def parse_markdown_segments(text: str) -> list:
         segments.append(('text', text))
 
     return segments
+
+
+class CopyButton(Button):
+    """A small copy button that uses pyperclip for clipboard operations."""
+
+    DEFAULT_CSS = """
+    CopyButton {
+        min-width: 4;
+        width: 4;
+        height: 3;
+        min-height: 3;
+        padding: 0;
+        margin: 0;
+        background: $surface;
+        border: solid $primary-darken-1;
+        content-align: center middle;
+    }
+
+    CopyButton:hover {
+        background: $primary;
+    }
+
+    CopyButton.-copied {
+        background: $success;
+        border: solid $success;
+    }
+
+    CopyButton.-failed {
+        background: $error;
+        border: solid $error;
+    }
+    """
+
+    def __init__(self, content_to_copy: str, **kwargs) -> None:
+        """Initialize copy button.
+
+        Args:
+            content_to_copy: The content to copy when clicked
+        """
+        super().__init__("📋", **kwargs)
+        self.content_to_copy = content_to_copy
+
+    def on_click(self) -> None:
+        """Handle click to copy content using pyperclip."""
+        try:
+            pyperclip.copy(self.content_to_copy)
+            self.label = "✓"
+            self.add_class("-copied")
+            self.remove_class("-failed")
+        except pyperclip.PyperclipException as exc:
+            logger.error("Failed to copy to clipboard: %s", exc)
+            self.label = "✗"
+            self.add_class("-failed")
+            self.remove_class("-copied")
+        self.set_timer(1.5, self._reset_button)
+
+    def _reset_button(self) -> None:
+        """Reset button to original state."""
+        self.label = "📋"
+        self.remove_class("-copied")
+        self.remove_class("-failed")
+
 
 class MessageContent(Static):
     """Static widget for message content."""
@@ -222,6 +287,7 @@ class StreamingMessageWidget(Container):
         self.accumulated_text: str = ""
         self.parent_container = parent_container
         self._update_pending = False
+        self._finalized = False
 
     def compose(self) -> ComposeResult:
         """Compose the streaming message widget."""
@@ -238,6 +304,8 @@ class StreamingMessageWidget(Container):
         Args:
             chunk: Text chunk to append
         """
+        if self._finalized:
+            return
         self.accumulated_text += chunk
         # Schedule UI update on main thread to avoid race conditions
         if not self._update_pending:
@@ -247,11 +315,45 @@ class StreamingMessageWidget(Container):
     def _do_update(self) -> None:
         """Perform the actual UI update on the main thread."""
         self._update_pending = False
+        if self._finalized:
+            return
 
         if self.text_content:
             self.text_content.update(Markdown(self.accumulated_text))
 
         # Auto-scroll parent container to keep new text visible
+        if self.parent_container:
+            self.parent_container.scroll_end(animate=False)
+
+    def finalize(self) -> None:
+        """Finalize the streaming message, replacing with proper code blocks."""
+        if self._finalized:
+            return
+        self._finalized = True
+
+        # Parse content into segments
+        segments = parse_markdown_segments(self.accumulated_text)
+
+        # Check if there are any code blocks
+        has_code = any(s[0] == 'code' for s in segments)
+        if not has_code:
+            return  # No code blocks, keep as-is
+
+        # Remove the simple text content widget
+        if self.text_content:
+            self.text_content.remove()
+            self.text_content = None
+
+        # Mount parsed segments with code blocks having copy buttons
+        for segment in segments:
+            if segment[0] == 'text':
+                widget = Static(Markdown(segment[1]), classes="text-content")
+                self.mount(widget)
+            elif segment[0] == 'code':
+                widget = CodeBlockWidget(segment[1], segment[2])
+                self.mount(widget)
+
+        # Scroll to show the updated content
         if self.parent_container:
             self.parent_container.scroll_end(animate=False)
 
