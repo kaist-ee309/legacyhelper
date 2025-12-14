@@ -314,8 +314,11 @@ class LegacyHelperApp(App[None]):
                 self.streaming_message.append_text(text)
 
     async def _clear_streaming_message(self) -> None:
-        """Thread-safe method to clear the streaming message reference."""
+        """Thread-safe method to finalize and clear the streaming message reference."""
         async with self._streaming_lock:
+            if self.streaming_message:
+                # Finalize to convert code blocks to have copy buttons
+                self.streaming_message.finalize()
             self.streaming_message = None
 
     def _update_status(self, status: str) -> None:
