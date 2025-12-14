@@ -13,8 +13,11 @@ from legacyhelper.ui.widgets import (
     MessageWidget,
     CommandPreviewWidget,
     CommandOutputWidget,
-    StatusBarWidget
+    StatusBarWidget,
+    SpinnerWidget,
+    StreamingMessageWidget
 )
+from legacyhelper.core.workflow import Workflow, WorkflowCallbacks
 
 
 class HistoryInput(Input):
@@ -58,7 +61,7 @@ class HistoryInput(Input):
             return
 
         # Save current input when starting navigation
-        if self.history_pos == 0:
+        if not self.history_pos:
             self.current_input = self.value
 
         # If at overflow, wrap back to most recent
@@ -89,7 +92,7 @@ class HistoryInput(Input):
 
         self.history_pos -= 1
 
-        if self.history_pos == 0:
+        if not self.history_pos:
             # Back to current input
             self.value = self.current_input
             self.cursor_position = len(self.value)
@@ -141,6 +144,31 @@ class ConversationPanel(ScrollableContainer):
         self.mount(preview)
         self.scroll_end(animate=True)
         return preview
+
+    def add_spinner(self, message: str = "Thinking...") -> SpinnerWidget:
+        """Add a spinner widget to show processing state.
+
+        Args:
+            message: The message to display with the spinner
+
+        Returns:
+            The mounted SpinnerWidget
+        """
+        spinner = SpinnerWidget(message)
+        self.mount(spinner)
+        self.scroll_end(animate=True)
+        return spinner
+
+    def add_streaming_message(self) -> StreamingMessageWidget:
+        """Add a streaming message widget.
+
+        Returns:
+            The mounted StreamingMessageWidget
+        """
+        message = StreamingMessageWidget(parent_container=self)
+        self.mount(message)
+        self.scroll_end(animate=True)
+        return message
 
     def add_command_output(self, command: str, output: str, exit_code: int) -> None:
         """Add command execution output.
@@ -204,7 +232,7 @@ class LegacyHelperApp(App[None]):
 
     current_command: reactive = reactive(None)
 
-    def __init__(self, agent:Agent=None, **kwargs) -> None:
+    def __init__(self, agent: Agent = None, **kwargs) -> None:
         """Initialize the app.
 
         Args:
@@ -212,9 +240,16 @@ class LegacyHelperApp(App[None]):
         """
         super().__init__(**kwargs)
         self.agent = agent
-        self.message_history = None
         self.conversation_panel: Optional[ConversationPanel] = None
         self.status_bar: Optional[StatusBarWidget] = None
+        self.current_spinner: Optional[SpinnerWidget] = None
+        self.streaming_message: Optional[StreamingMessageWidget] = None
+        # Locks for thread-safe access to shared state
+        self._spinner_lock = asyncio.Lock()
+        self._streaming_lock = asyncio.Lock()
+        self._processing = False  # Flag to prevent concurrent submissions
+        # Instantiate workflow object that supervises agent state and message history
+        self.workflow = Workflow()
 
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
@@ -240,6 +275,59 @@ class LegacyHelperApp(App[None]):
         input_widget = self.query_one("#user-input", HistoryInput)
         input_widget.focus()
 
+    async def _add_spinner(self, message: str) -> None:
+        """Thread-safe method to add a spinner.
+
+        Args:
+            message: Message to display with spinner
+        """
+        async with self._spinner_lock:
+            if self.current_spinner is None and self.conversation_panel:
+                self.current_spinner = self.conversation_panel.add_spinner(message)
+
+    async def _remove_spinner(self) -> None:
+        """Thread-safe method to remove the current spinner."""
+        async with self._spinner_lock:
+            if self.current_spinner:
+                await self.current_spinner.remove()
+                self.current_spinner = None
+
+    async def _add_streaming_message(self) -> Optional[StreamingMessageWidget]:
+        """Thread-safe method to add a streaming message widget.
+
+        Returns:
+            The created StreamingMessageWidget or None
+        """
+        async with self._streaming_lock:
+            if self.conversation_panel:
+                self.streaming_message = self.conversation_panel.add_streaming_message()
+            return self.streaming_message
+
+    async def _append_to_stream(self, text: str) -> None:
+        """Thread-safe method to append text to streaming message.
+
+        Args:
+            text: Text chunk to append
+        """
+        async with self._streaming_lock:
+            if self.streaming_message:
+                self.streaming_message.append_text(text)
+
+    async def _clear_streaming_message(self) -> None:
+        """Thread-safe method to finalize and clear the streaming message reference."""
+        async with self._streaming_lock:
+
+            self.streaming_message = None
+
+    def _update_status(self, status: str) -> None:
+        """Update the status bar.
+
+        Args:
+            status: The new status
+        """
+        if self.status_bar:
+            self.status_bar.set_status(status)
+
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle user input submission.
 
@@ -250,55 +338,64 @@ class LegacyHelperApp(App[None]):
         if not user_input:
             return
 
-        # Add to history and clear input
-        input_widget = self.query_one("#user-input", HistoryInput)
-        input_widget.add_to_history(user_input)
-        event.input.value = ""
+        # Prevent concurrent submissions
+        if self._processing:
+            return
+        self._processing = True
 
-        # Add user message to conversation
-        if self.conversation_panel:
-            self.conversation_panel.add_message("user", user_input)
-            self.conversation_panel.add_message(
-                "system",
-                "🤔 Thinking..."
-            )
+        try:
+            # Add to history and clear input
+            input_widget = self.query_one("#user-input", HistoryInput)
+            input_widget.add_to_history(user_input)
+            event.input.value = ""
 
-        # Update status
-        if self.status_bar:
-            self.status_bar.set_status("thinking")
+            # Add user message to conversation
+            if self.conversation_panel:
+                self.conversation_panel.add_message("user", user_input)
 
-        # Get response from agent
-        if self.agent:
-            try:
-                result = await self.agent.run(
-                    user_input, message_history=self.message_history
+            # Add spinner (thread-safe)
+            await self._add_spinner("Thinking...")
+
+            # Update status
+            if self.status_bar:
+                self.status_bar.set_status("thinking")
+
+            # Get response from agent with streaming
+            if self.agent:
+                callbacks = WorkflowCallbacks(
+                    on_spinner_add=self._add_spinner,
+                    on_spinner_remove=self._remove_spinner,
+                    on_streaming_start=self._add_streaming_message,
+                    on_stream_append=self._append_to_stream,
+                    on_stream_clear=self._clear_streaming_message,
+                    on_error=self._handle_error,
+                    on_status_update=self._update_status,
                 )
-                response = str(result.output)
-                self.message_history = result.all_messages()
+                await self.workflow.process_agent_response(
+                    self.agent, user_input, callbacks
+                )
 
-                # Remove "thinking" message
-                if self.conversation_panel:
-                    messages = list(self.conversation_panel.query("MessageWidget"))
-                    if messages and "Thinking" in str(messages[-1].content):
-                        await messages[-1].remove()
-                    self.conversation_panel.add_message("assistant", response)
+        except Exception as exc:  # pylint: disable=broad-except
+            await self._handle_error(exc)
+        finally:
+            self._processing = False
 
-                # Update status
-                if self.status_bar:
-                    self.status_bar.set_status("ready")
+    async def _handle_error(self, error: Exception) -> None:
+        """Handle errors during processing.
 
-            except Exception as e:
-                if self.conversation_panel:
-                    messages = list(self.conversation_panel.query("MessageWidget"))
-                    if messages:
-                        await messages[-1].remove()
-                    self.conversation_panel.add_message(
-                        "error",
-                        f"{str(e)}"
-                    )
+        Args:
+            error: The exception that occurred
+        """
+        # Remove spinner on error (thread-safe)
+        await self._remove_spinner()
+        # Clear streaming message reference
+        await self._clear_streaming_message()
 
-                if self.status_bar:
-                    self.status_bar.set_status("error")
+        if self.conversation_panel:
+            self.conversation_panel.add_message("error", str(error))
+
+        if self.status_bar:
+            self.status_bar.set_status("error")
 
     async def on_button_pressed(self, event) -> None:
         """Handle button presses.
@@ -312,102 +409,13 @@ class LegacyHelperApp(App[None]):
         button_id = event.button.id
 
         if button_id == "execute-cmd" and self.current_command:
-            await self._execute_current_command()
-            await event.button.parent.remove()
+            pass
 
         elif button_id == "reject-cmd":
-            if self.conversation_panel:
-                self.conversation_panel.add_message(
-                    "system",
-                    "✗ Command rejected"
-                )
-            await event.button.parent.remove()
-            self.current_command = None
+            pass
 
         elif button_id == "modify-cmd" and self.current_command:
-            # Pre-fill input with current command
-            input_widget = self.query_one("#user-input", HistoryInput)
-            input_widget.value = self.current_command.command
-            input_widget.focus()
-            await event.button.parent.remove()
-            self.current_command = None
-
-    async def _execute_current_command(self) -> None:
-        """Execute the currently selected command."""
-        if not self.current_command or not self.conversation_panel:
-            return
-
-        command = self.current_command.command
-
-        # Update status
-        if self.status_bar:
-            self.status_bar.set_status("thinking")
-
-        self.conversation_panel.add_message(
-            "system",
-            f"⚙️ Executing: `{command}`"
-        )
-
-        # Check if we can execute
-        can_exec, reason = self.command_executor.can_execute(command)
-        if not can_exec:
-            self.conversation_panel.add_message(
-                "error",
-                f"Cannot execute: {reason}"
-            )
-            if self.status_bar:
-                self.status_bar.set_status("error")
-            self.current_command = None
-            return
-
-        # Execute the command in a thread pool
-        result = await asyncio.to_thread(
-            self.interactive_executor.execute_with_confirmation,
-            command,
-            confirmed=True
-        )
-
-        # Display results
-        if result.success:
-            output = result.stdout if result.stdout else result.stderr
-            self.conversation_panel.add_command_output(
-                command,
-                output,
-                result.exit_code
-            )
-        else:
-            error_msg = result.error_message or result.stderr or "Command failed"
-            self.conversation_panel.add_message(
-                "error",
-                f"Execution failed: {error_msg}"
-            )
-            if result.stderr or result.stdout:
-                self.conversation_panel.add_command_output(
-                    command,
-                    result.stderr or result.stdout,
-                    result.exit_code
-                )
-
-        # Update status
-        if self.status_bar:
-            self.status_bar.set_status("ready" if result.success else "error")
-
-        self.current_command = None
-
-    def action_clear_conversation(self) -> None:
-        """Clear the conversation panel."""
-        if self.conversation_panel:
-            for widget in self.conversation_panel.query(
-                "MessageWidget, CommandPreviewWidget, CommandOutputWidget"
-            ):
-                widget.remove()
-            self.conversation_panel.add_message(
-                "system",
-                "Conversation cleared. How can I help you?"
-            )
-
-        if self.status_bar:
-            self.status_bar.set_status("ready")
+            pass
 
     async def action_quit(self) -> None:
         """Quit the application."""

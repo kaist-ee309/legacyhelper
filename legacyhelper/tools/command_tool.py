@@ -4,10 +4,11 @@ import re
 import subprocess
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pydantic_ai import RunContext, Tool
 from pydantic_ai import FunctionToolset
 
+MAX_OUTPUT_CHARS = 50_000
 
 class BashResult(BaseModel):
     """Contains the result of a bash command execution."""
@@ -15,11 +16,18 @@ class BashResult(BaseModel):
     stderr: str
     returncode: int
 
-
-class ExecDeps(BaseModel):
-    """Contains the dependencies for executing a command."""
-    workdir: str
-
+    # if response is way too long, command agent to invoke another alternative.
+    @field_validator("stdout", "stderr")
+    @classmethod
+    def limit_output(cls, v: str) -> str:
+        """if command output is observed to be too long, it rejects it."""
+        if len(v) > MAX_OUTPUT_CHARS:
+            return (
+                "⚠️ Context too long. "
+                "Command output exceeds limit. "
+                "Use a different method (e.g. filtering, paging, or summary)."
+            )
+        return v
 
 def bash_tool(command: str) -> BashResult:
     """
@@ -36,6 +44,13 @@ def bash_tool(command: str) -> BashResult:
         return BashResult(
             stdout="",
             stderr="Blocked dangerous command",
+            returncode=1,
+        )
+
+    if command.startswith("sudo"):
+        return BashResult(
+            stdout="",
+            stderr="The command requires superuser privalige. Abort.",
             returncode=1,
         )
 
@@ -61,8 +76,11 @@ def get_current_system_log() -> str:
     Call when "error" level system log is needed.
     """
     command = ["journalctl", "-p", "3", "-xb", "--no-pager"]
-    result = subprocess.run(command, capture_output=True, text=True, check=True)
-    return result.stdout
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        return result.stdout
+    except Exception as exc:  # pylint: disable=broad-except
+        return str(exc)
 
 
 @system_log_toolset.tool
@@ -72,8 +90,11 @@ def get_previous_system_log() -> str:
     Call when system log for previous boot is required or booting related problem.
     """
     command = ["journalctl", "-p", "3", "-xb", "-1", "--no-pager"]
-    result = subprocess.run(command, capture_output=True, text=True, check=True)
-    return result.stdout
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        return result.stdout
+    except Exception as exc:  # pylint: disable=broad-except
+        return str(exc)
 
 
 @system_log_toolset.tool
@@ -193,6 +214,8 @@ SYSTEM_LOG_TOOLSET = system_log_toolset
 bash_tool = Tool(
     bash_tool,
     name="bash",
-    description="Run safe bash commands in the configured working directory.",
+    description=("Run safe bash commands in the configured working directory."
+                 "The tool rejects command response beyond given max_length."
+                 "Devise a command efficiently so no redundant retries as possible."),
     takes_ctx=False,
 )

@@ -1,5 +1,6 @@
 """Custom widgets for LegacyHelper TUI."""
 import re
+from typing import Optional
 from textual.widgets import Static, Button, Label
 from textual.containers import Container, Horizontal
 from textual.app import ComposeResult
@@ -53,59 +54,6 @@ def parse_markdown_segments(text: str) -> list:
         segments.append(('text', text))
 
     return segments
-
-
-class CopyButton(Button):
-    """A small copy button for copying content."""
-
-    DEFAULT_CSS = """
-    CopyButton {
-        min-width: 4;
-        width: auto;
-        height: 1;
-        padding: 0 1;
-        margin: 0;
-        background: $surface;
-        border: none;
-    }
-
-    CopyButton:hover {
-        background: $primary;
-    }
-
-    CopyButton.-copied {
-        background: $success;
-    }
-    """
-
-    class Copied(Message):
-        """Message emitted when content is copied."""
-
-        def __init__(self, content: str) -> None:
-            self.content = content
-            super().__init__()
-
-    def __init__(self, content_to_copy: str, **kwargs) -> None:
-        """Initialize copy button.
-
-        Args:
-            content_to_copy: The content to copy when clicked
-        """
-        super().__init__("📋", **kwargs)
-        self.content_to_copy = content_to_copy
-
-    def on_click(self) -> None:
-        """Handle click to copy content."""
-        self.app.copy_to_clipboard(self.content_to_copy)
-        self.label = "✓"
-        self.add_class("-copied")
-        self.set_timer(1.5, self._reset_button)
-
-    def _reset_button(self) -> None:
-        """Reset button to original state."""
-        self.label = "📋"
-        self.remove_class("-copied")
-
 
 class MessageContent(Static):
     """Static widget for message content."""
@@ -240,6 +188,82 @@ class MessageWidget(Container):
             yield content_widget
 
 
+class StreamingMessageWidget(Container):
+    """Widget for displaying a streaming assistant message with incremental text updates."""
+
+    DEFAULT_CSS = """
+    StreamingMessageWidget {
+        width: 100%;
+        height: auto;
+        padding: 1 2;
+        margin-bottom: 1;
+        background: $surface-darken-1;
+        border-left: thick $accent;
+    }
+
+    StreamingMessageWidget .assistant-label {
+        margin-bottom: 1;
+    }
+
+    StreamingMessageWidget .text-content {
+        width: 100%;
+    }
+    """
+
+    def __init__(self, parent_container=None, **kwargs) -> None:
+        """Initialize streaming message widget.
+
+        Args:
+            parent_container: Reference to parent ScrollableContainer for auto-scroll
+        """
+        super().__init__(**kwargs)
+        self.add_class("assistant-message")
+        self.text_content: Optional[Static] = None
+        self.accumulated_text: str = ""
+        self.parent_container = parent_container
+        self._update_pending = False
+
+    def compose(self) -> ComposeResult:
+        """Compose the streaming message widget."""
+        yield Static("[bold magenta]Assistant:[/bold magenta]",
+                     classes="assistant-label")
+        self.text_content = Static("", classes="text-content", id="stream-text")
+        yield self.text_content
+
+    def append_text(self, chunk: str) -> None:
+        """Append text chunk to the message.
+
+        Thread-safe: Uses call_later to ensure UI updates happen on main thread.
+
+        Args:
+            chunk: Text chunk to append
+        """
+        self.accumulated_text += chunk
+        # Schedule UI update on main thread to avoid race conditions
+        if not self._update_pending:
+            self._update_pending = True
+            self.call_later(self._do_update)
+
+    def _do_update(self) -> None:
+        """Perform the actual UI update on the main thread."""
+        self._update_pending = False
+
+        if self.text_content:
+            self.text_content.update(Markdown(self.accumulated_text))
+
+        # Auto-scroll parent container to keep new text visible
+        if self.parent_container:
+            self.parent_container.scroll_end(animate=False)
+
+    def get_content(self) -> str:
+        """Get the complete accumulated text.
+
+        Returns:
+            The complete message content
+        """
+        return self.accumulated_text
+
+
 class CommandPreviewWidget(Container):
     """Widget for displaying and selecting proposed commands."""
 
@@ -359,12 +383,12 @@ class CommandOutputWidget(Container):
         self.command = command
         self.output = output
         self.exit_code = exit_code
-        if exit_code != 0:
+        if exit_code:
             self.add_class("error-output")
 
     def compose(self) -> ComposeResult:
         """Compose the output display."""
-        if self.exit_code == 0:
+        if not self.exit_code:
             yield Label("✓ Command Output:", classes="output-title")
         else:
             yield Label(f"✗ Command Failed (exit code: {self.exit_code}):", classes="output-title")
@@ -377,6 +401,53 @@ class CommandOutputWidget(Container):
             self.output if self.output else "[dim](no output)[/dim]",
             classes="output-content"
         )
+
+
+class SpinnerWidget(Container):
+    """Animated spinner widget for indicating processing state."""
+
+    DEFAULT_CSS = """
+    SpinnerWidget {
+        width: 100%;
+        height: auto;
+        padding: 1 2;
+        margin-bottom: 1;
+        background: $warning-darken-3;
+        border-left: thick $warning;
+    }
+    """
+
+    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self, message: str = "Thinking...", **kwargs) -> None:
+        """Initialize spinner widget.
+
+        Args:
+            message: The message to display alongside the spinner
+        """
+        super().__init__(**kwargs)
+        self.message = message
+        self.frame_index = 0
+        self.content_widget = None
+
+    def compose(self) -> ComposeResult:
+        """Compose the spinner widget."""
+        self.content_widget = MessageContent()
+        yield self.content_widget
+
+    def on_mount(self) -> None:
+        """Start the spinner animation when mounted."""
+        self.update_spinner()
+        self.set_interval(0.1, self.update_spinner)
+
+    def update_spinner(self) -> None:
+        """Update the spinner to the next frame."""
+        if self.content_widget:
+            frame = self.SPINNER_FRAMES[self.frame_index]
+            self.content_widget.update(
+                f"[dim italic]{frame} {self.message}[/dim italic]"
+            )
+            self.frame_index = (self.frame_index + 1) % len(self.SPINNER_FRAMES)
 
 
 class StatusBarWidget(Static):
