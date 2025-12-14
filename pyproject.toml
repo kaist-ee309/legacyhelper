@@ -1,7 +1,7 @@
 [project]
 name = "legacyhelper"
 version = "0.1.0"
-description = "Add your description here"
+description = "Life savior for novice UNIX users."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
