@@ -11,6 +11,7 @@ dependencies = [
     "openai>=2.6.1",
     "pydantic-ai",
     "pylint>=4.0.2",
+    "pyperclip>=1.8.0",
     "pytest>=8.4.2",
     "rich",
     "textual>=6.5.0",
