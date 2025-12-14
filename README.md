@@ -93,10 +93,32 @@ legacyhelper/
 ```bash
 pytest
 ```
-
+This gives a result:
+```
+Name                                 Stmts   Miss  Cover
+--------------------------------------------------------
+legacyhelper/__init__.py                 0      0   100%
+legacyhelper/core/__init__.py            0      0   100%
+legacyhelper/core/workflow.py           47      0   100%
+legacyhelper/model/__init__.py           0      0   100%
+legacyhelper/model/factory.py           45      0   100%
+legacyhelper/tools/__init__.py           0      0   100%
+legacyhelper/tools/command_tool.py      96      0   100%
+legacyhelper/ui/__init__.py              2      2     0%
+legacyhelper/ui/app.py                 190    190     0%
+legacyhelper/ui/widgets.py             203    203     0%
+--------------------------------------------------------
+TOTAL                                  583    395    32%
+```
+Except UI component (`app.py`, `widgets.py`), our test suite covers all statement in implementation.
 ### Code Quality
 ```bash
 pylint legacyhelper --disable=all --enable=C,W,E 2>&1
+```
+This would give:
+```
+--------------------------------------------------------------------
+Your code has been rated at 10.00/10 (previous run: 10.00/10, +0.00)
 ```
 
 ## Tech Stack
