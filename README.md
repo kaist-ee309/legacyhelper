@@ -23,6 +23,7 @@ An AI-powered troubleshooting agent for legacy Linux/UNIX systems. LegacyHelper 
 ```bash
 uv venv
 uv sync
+source .venv/bin/activate
 ```
 
 ### 2. Configure API Key
@@ -92,7 +93,8 @@ legacyhelper/
 
 ### Run Tests
 ```bash
-pytest
+source .venv/bin/activate
+pytest --cov=legacyhelper/
 ```
 This gives a result:
 ```
@@ -114,6 +116,7 @@ TOTAL                                  583    395    32%
 Except UI component (`app.py`, `widgets.py`), our test suite covers all statement in implementation.
 ### Code Quality
 ```bash
+source .venv/bin/activate
 pylint legacyhelper --disable=all --enable=C,W,E 2>&1
 ```
 This would give:
