@@ -5,7 +5,7 @@ This module tests the LegacyHelper agent with proper Pydantic AI testing pattern
 - FunctionModel for custom tool invocation behavior
 - Agent.override for replacing model in tests
 - capture_run_messages for inspecting agent conversations
-- ALLOW_MODEL_REQUESTS=False to block accidental LLM calls
+- ALLOW_MODEL_REQUESTS=False is set globally in this test module (see line 41) to block accidental LLM calls as a safety measure
 
 Reference: https://ai.pydantic.dev/testing/
 """
