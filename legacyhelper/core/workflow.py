@@ -1,61 +1,102 @@
-from pydantic_ai import FinalResultEvent, FunctionToolCallEvent
-from typing import Optional
-from textual.app import App
-from legacyhelper.ui.widgets import StreamingMessageWidget
+from pydantic_ai import Agent, FinalResultEvent, FunctionToolCallEvent
+from typing import Optional, Callable, Awaitable, TYPE_CHECKING
+from dataclasses import dataclass
 
-async def agent_graph_traversal(self: App, 
-                                user_input: str, 
-                                streaming_message: Optional[StreamingMessageWidget]):
-    '''
-    Agent object construct graph for its state management and transition,
-    and this can be explicitly traversed.
-    With this approach, application can see if the agent is calling tools, or
-    making final response.
-    
-    :param self: Description
-    :param user_input: Description
-    :param streaming_message: Description
-    '''
-    # Use agent.iter() to iterate over event graph (model requests, tool calls, etc.)
-    async with self.agent.iter(
-        user_input, message_history=self.message_history
-    ) as result:
-        # Process each node in the agent graph
-        async for node in result:
-            # Check if this is a model request node with streaming text
-            if self.agent.is_model_request_node(node):
-                async with node.stream(result.ctx) as request_stream:
-                    final_result_found = False
-                    async for event in request_stream:
-                        if isinstance(event, FinalResultEvent):
-                            # Response is finalized.
-                            if self.conversation_panel:
-                                streaming_message = self.conversation_panel.add_streaming_message()
-                            final_result_found = True
-                            break
+if TYPE_CHECKING:
+    from legacyhelper.ui.widgets import StreamingMessageWidget
 
-                    if final_result_found:
-                        # Stop spinner.
-                        if self.current_spinner:
-                            await self.current_spinner.remove()
-                            self.current_spinner = None
-                        # Once final response is observed, this can be streamed out
-                        # to display.
-                        async for output in request_stream.stream_text(delta=True,
-                                                                        debounce_by=0.01):
-                            if streaming_message:
-                                streaming_message.append_text(output)
 
-            elif self.agent.is_call_tools_node(node):
-                async with node.stream(result.ctx) as handle_stream:
-                    async for event in handle_stream:
-                        if isinstance(event, FunctionToolCallEvent):
-                            if self.conversation_panel and not self.current_spinner:
-                                # Show command executing with spinner.
-                                command = event.part.args_as_dict().pop("command", None)
-                                tool_name = event.part.args_as_dict().pop("tool_name", "[GENERIC TOOL]")
-                                entity = command if command is not None else tool_name
-                                self.current_spinner = self.conversation_panel.add_spinner(f"Running... {entity}")
+@dataclass
+class WorkflowCallbacks:
+    """Callbacks for UI updates during workflow processing."""
+    on_spinner_add: Callable[[str], Awaitable[None]]
+    on_spinner_remove: Callable[[], Awaitable[None]]
+    on_streaming_start: Callable[[], Awaitable[Optional["StreamingMessageWidget"]]]
+    on_stream_append: Callable[[str], Awaitable[None]]
+    on_stream_clear: Callable[[], Awaitable[None]]
+    on_error: Callable[[Exception], Awaitable[None]]
+    on_status_update: Callable[[str], None]
 
-    # Update message history
-    self.message_history = result.result.all_messages()
+
+class Workflow:
+    """Manages agent interaction and message processing."""
+
+    def __init__(self) -> None:
+        """Initialize the workflow."""
+        self.message_history = None
+
+    async def process_agent_response(
+        self,
+        agent: Agent,
+        user_input: str,
+        callbacks: WorkflowCallbacks,
+    ) -> None:
+        """Process the agent response with proper synchronization.
+
+        Args:
+            agent: The Pydantic AI agent instance
+            user_input: The user's input text
+            callbacks: UI callbacks for workflow events
+        """
+        try:
+            # Use agent.iter() to iterate over event graph
+            async with agent.iter(
+                user_input, message_history=self.message_history
+            ) as result:
+                # Process each node in the agent graph
+                async for node in result:
+                    await self._process_node(agent, node, result, callbacks)
+
+            self.message_history = result.result.all_messages()
+
+            # Clear streaming message reference
+            await callbacks.on_stream_clear()
+
+            # Update status
+            callbacks.on_status_update("ready")
+
+        except Exception as e:
+            await callbacks.on_error(e)
+
+    async def _process_node(
+        self, agent: Agent, node, result, callbacks: WorkflowCallbacks
+    ) -> None:
+        """Process a single agent graph node.
+
+        Args:
+            agent: The Pydantic AI agent instance
+            node: The agent graph node
+            result: The agent result context
+            callbacks: UI callbacks for workflow events
+        """
+        # Check if this is a model request node with streaming text
+        if agent.is_model_request_node(node):
+            async with node.stream(result.ctx) as request_stream:
+                final_result_found = False
+                async for event in request_stream:
+                    if isinstance(event, FinalResultEvent):
+                        # Create streaming message widget (thread-safe via callback)
+                        await callbacks.on_streaming_start()
+                        final_result_found = True
+                        break
+
+                if final_result_found:
+                    # Stop spinner (thread-safe via callback)
+                    await callbacks.on_spinner_remove()
+                    # Stream text to display
+                    async for output in request_stream.stream_text(
+                        delta=True, debounce_by=0.01
+                    ):
+                        await callbacks.on_stream_append(output)
+
+        elif agent.is_call_tools_node(node):
+            async with node.stream(result.ctx) as handle_stream:
+                async for event in handle_stream:
+                    if isinstance(event, FunctionToolCallEvent):
+                        # Get tool info
+                        args = event.part.args_as_dict()
+                        command = args.get("command")
+                        tool_name = args.get("tool_name", "[GENERIC TOOL]")
+                        entity = command if command is not None else tool_name
+                        # Add spinner for tool execution (thread-safe via callback)
+                        await callbacks.on_spinner_add(f"Running... {entity}")

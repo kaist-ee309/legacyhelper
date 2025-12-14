@@ -7,7 +7,7 @@ from textual.widgets import Header, Footer, Input
 from textual.binding import Binding
 from textual.reactive import reactive
 from textual import events
-from pydantic_ai import Agent, FinalResultEvent, FunctionToolCallEvent
+from pydantic_ai import Agent
 
 from legacyhelper.ui.widgets import (
     MessageWidget,
@@ -17,6 +17,7 @@ from legacyhelper.ui.widgets import (
     SpinnerWidget,
     StreamingMessageWidget
 )
+from legacyhelper.core.workflow import Workflow, WorkflowCallbacks
 
 
 class HistoryInput(Input):
@@ -239,7 +240,6 @@ class LegacyHelperApp(App[None]):
         """
         super().__init__(**kwargs)
         self.agent = agent
-        self.message_history = None
         self.conversation_panel: Optional[ConversationPanel] = None
         self.status_bar: Optional[StatusBarWidget] = None
         self.current_spinner: Optional[SpinnerWidget] = None
@@ -248,6 +248,8 @@ class LegacyHelperApp(App[None]):
         self._spinner_lock = asyncio.Lock()
         self._streaming_lock = asyncio.Lock()
         self._processing = False  # Flag to prevent concurrent submissions
+        # Instantiate workflow object that supervises agent state and message history
+        self.workflow = Workflow()
 
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
@@ -316,6 +318,15 @@ class LegacyHelperApp(App[None]):
         async with self._streaming_lock:
             self.streaming_message = None
 
+    def _update_status(self, status: str) -> None:
+        """Update the status bar.
+
+        Args:
+            status: The new status
+        """
+        if self.status_bar:
+            self.status_bar.set_status(status)
+
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle user input submission.
 
@@ -350,78 +361,23 @@ class LegacyHelperApp(App[None]):
 
             # Get response from agent with streaming
             if self.agent:
-                await self._process_agent_response(user_input)
+                callbacks = WorkflowCallbacks(
+                    on_spinner_add=self._add_spinner,
+                    on_spinner_remove=self._remove_spinner,
+                    on_streaming_start=self._add_streaming_message,
+                    on_stream_append=self._append_to_stream,
+                    on_stream_clear=self._clear_streaming_message,
+                    on_error=self._handle_error,
+                    on_status_update=self._update_status,
+                )
+                await self.workflow.process_agent_response(
+                    self.agent, user_input, callbacks
+                )
 
         except Exception as e:
             await self._handle_error(e)
         finally:
             self._processing = False
-
-    async def _process_agent_response(self, user_input: str) -> None:
-        """Process the agent response with proper synchronization.
-
-        Args:
-            user_input: The user's input text
-        """
-        try:
-            # Use agent.iter() to iterate over event graph
-            async with self.agent.iter(
-                user_input, message_history=self.message_history
-            ) as result:
-                # Process each node in the agent graph
-                async for node in result:
-                    await self._process_node(node, result)
-
-            self.message_history = result.result.all_messages()
-
-            # Clear streaming message reference
-            await self._clear_streaming_message()
-
-            # Update status
-            if self.status_bar:
-                self.status_bar.set_status("ready")
-
-        except Exception as e:
-            await self._handle_error(e)
-
-    async def _process_node(self, node, result) -> None:
-        """Process a single agent graph node.
-
-        Args:
-            node: The agent graph node
-            result: The agent result context
-        """
-        # Check if this is a model request node with streaming text
-        if self.agent.is_model_request_node(node):
-            async with node.stream(result.ctx) as request_stream:
-                final_result_found = False
-                async for event in request_stream:
-                    if isinstance(event, FinalResultEvent):
-                        # Create streaming message widget (thread-safe)
-                        await self._add_streaming_message()
-                        final_result_found = True
-                        break
-
-                if final_result_found:
-                    # Stop spinner (thread-safe)
-                    await self._remove_spinner()
-                    # Stream text to display
-                    async for output in request_stream.stream_text(
-                        delta=True, debounce_by=0.01
-                    ):
-                        await self._append_to_stream(output)
-
-        elif self.agent.is_call_tools_node(node):
-            async with node.stream(result.ctx) as handle_stream:
-                async for event in handle_stream:
-                    if isinstance(event, FunctionToolCallEvent):
-                        # Get tool info
-                        args = event.part.args_as_dict()
-                        command = args.get("command")
-                        tool_name = args.get("tool_name", "[GENERIC TOOL]")
-                        entity = command if command is not None else tool_name
-                        # Add spinner for tool execution (thread-safe)
-                        await self._add_spinner(f"Running... {entity}")
 
     async def _handle_error(self, error: Exception) -> None:
         """Handle errors during processing.
