@@ -297,7 +297,7 @@ class LegacyHelperApp(App[None]):
             The created StreamingMessageWidget or None
         """
         async with self._streaming_lock:
-            if self.streaming_message is None and self.conversation_panel:
+            if self.conversation_panel:
                 self.streaming_message = self.conversation_panel.add_streaming_message()
             return self.streaming_message
 
