@@ -14,6 +14,7 @@ An AI-powered troubleshooting agent for legacy Linux/UNIX systems. LegacyHelper 
 
 - Python 3.11+
 - API key for at least one of: OpenAI, Claude (Anthropic), or Google Gemini
+- For Linux xclip or xsel or modules qtpy or PyQT5 is required
 
 ## Setup
 
