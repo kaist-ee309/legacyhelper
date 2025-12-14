@@ -9,6 +9,9 @@ This module tests the LegacyHelper agent with proper Pydantic AI testing pattern
 
 Reference: https://ai.pydantic.dev/testing/
 """
+# pylint: disable=redefined-outer-name
+# pylint: disable=unused-argument
+# pytest fixtures needed. disable some linter warnings.
 import re
 from datetime import timezone
 from typing import List
@@ -31,11 +34,7 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.models.function import FunctionModel, AgentInfo
 from pydantic_ai import ModelMessage
 
-from legacyhelper.tools.command_tool import (
-    bash_tool,
-    SYSTEM_LOG_TOOLSET,
-    BashResult,
-)
+from legacyhelper.tools.command_tool import bash_tool, SYSTEM_LOG_TOOLSET
 from system_prompt import SYSTEM
 
 # Block all real model requests - safety measure
@@ -148,7 +147,9 @@ class TestAgentWithTestModel:
         assert len(user_parts) >= 1
         assert "Hello" in user_parts[0].content
 
-    async def test_agent_with_custom_output_text(self, simple_agent, mock_subprocess_popen):
+    async def test_agent_with_custom_output_text(
+        self, simple_agent, mock_subprocess_popen
+    ):
         """Test TestModel with custom output text."""
         custom_response = "Files listed successfully: file1.txt, file2.py"
 
@@ -174,7 +175,9 @@ class TestAgentWithTestModel:
         # TestModel should have triggered tool execution
         assert len(tool_returns) >= 1
 
-    async def test_full_agent_with_all_tools(self, legacy_agent, mock_subprocess_popen, mock_subprocess_run):
+    async def test_full_agent_with_all_tools(
+        self, legacy_agent, mock_subprocess_popen, mock_subprocess_run
+    ):
         """Test the full LegacyHelper agent with all tools available."""
         with capture_run_messages() as messages:
             with legacy_agent.override(model=TestModel()):
@@ -237,18 +240,19 @@ class TestAgentWithTestModelMessageValidation:
 class TestAgentWithFunctionModel:
     """Tests using FunctionModel for custom tool invocation."""
 
-    async def test_function_model_calls_specific_command(self, simple_agent, mock_subprocess_popen):
+    async def test_function_model_calls_specific_command(
+        self, simple_agent, mock_subprocess_popen
+    ):
         """Test FunctionModel calling bash with a specific command."""
         def call_ls_command(
-            messages: List[ModelMessage], info: AgentInfo
+            messages: List[ModelMessage], info: AgentInfo  # pylint: disable=unused-argument
         ) -> ModelResponse:
             if len(messages) == 1:
                 # First call - invoke bash tool with ls command
                 args = {'command': 'ls -la'}
                 return ModelResponse(parts=[ToolCallPart('bash', args)])
-            else:
-                # Second call - return final response
-                return ModelResponse(parts=[TextPart('Listed files successfully')])
+            # Second call - return final response
+            return ModelResponse(parts=[TextPart('Listed files successfully')])
 
         with capture_run_messages() as messages:
             with simple_agent.override(model=FunctionModel(call_ls_command)):
@@ -267,10 +271,12 @@ class TestAgentWithFunctionModel:
         assert len(tool_calls) >= 1
         assert tool_calls[0].args.get('command') == 'ls -la'
 
-    async def test_function_model_extracts_from_prompt(self, simple_agent, mock_subprocess_popen):
+    async def test_function_model_extracts_from_prompt(
+        self, simple_agent, mock_subprocess_popen
+    ):
         """Test FunctionModel extracting command from user prompt."""
         def extract_command_from_prompt(
-            messages: List[ModelMessage], info: AgentInfo
+            messages: List[ModelMessage], info: AgentInfo  # pylint: disable=unused-argument
         ) -> ModelResponse:
             if len(messages) == 1:
                 # Extract command from user prompt
@@ -286,13 +292,12 @@ class TestAgentWithFunctionModel:
                     cmd = 'echo "No content"'
                 args = {'command': cmd}
                 return ModelResponse(parts=[ToolCallPart('bash', args)])
-            else:
-                tool_return = messages[-1].parts[0]
-                if hasattr(tool_return, 'content'):
-                    return ModelResponse(
-                        parts=[TextPart(f'Command result: {tool_return.content}')]
-                    )
-                return ModelResponse(parts=[TextPart('Command executed')])
+            tool_return = messages[-1].parts[0]
+            if hasattr(tool_return, 'content'):
+                return ModelResponse(
+                    parts=[TextPart(f'Command result: {tool_return.content}')]
+                )
+            return ModelResponse(parts=[TextPart('Command executed')])
 
         with simple_agent.override(model=FunctionModel(extract_command_from_prompt)):
             result = await simple_agent.run("Please run `pwd` for me")
@@ -302,21 +307,20 @@ class TestAgentWithFunctionModel:
     async def test_function_model_handles_dangerous_commands(self, simple_agent):
         """Test that dangerous commands are blocked even with FunctionModel."""
         def try_dangerous_command(
-            messages: List[ModelMessage], info: AgentInfo
+            messages: List[ModelMessage], info: AgentInfo  # pylint: disable=unused-argument
         ) -> ModelResponse:
             if len(messages) == 1:
                 # Try to run a dangerous command
                 args = {'command': 'rm -rf /'}
                 return ModelResponse(parts=[ToolCallPart('bash', args)])
-            else:
-                tool_return = messages[-1].parts[0]
-                return ModelResponse(
-                    parts=[TextPart(f'Result: {tool_return.content}')]
-                )
+            tool_return = messages[-1].parts[0]
+            return ModelResponse(
+                parts=[TextPart(f'Result: {tool_return.content}')]
+            )
 
         with capture_run_messages() as messages:
             with simple_agent.override(model=FunctionModel(try_dangerous_command)):
-                result = await simple_agent.run("Delete everything")
+                await simple_agent.run("Delete everything")
 
         # Verify the command was blocked
         tool_returns = []
@@ -329,12 +333,14 @@ class TestAgentWithFunctionModel:
         # BashResult should contain blocked message
         assert any('Blocked dangerous command' in str(tr.content) for tr in tool_returns)
 
-    async def test_function_model_multi_tool_sequence(self, legacy_agent, mock_subprocess_popen, mock_subprocess_run):
+    async def test_function_model_multi_tool_sequence(
+        self, legacy_agent, mock_subprocess_popen, mock_subprocess_run
+    ):
         """Test FunctionModel with multiple tool calls in sequence."""
         call_count = [0]
 
         def multi_tool_workflow(
-            messages: List[ModelMessage], info: AgentInfo
+            _messages: List[ModelMessage], _info: AgentInfo
         ) -> ModelResponse:
             call_count[0] += 1
 
@@ -343,16 +349,15 @@ class TestAgentWithFunctionModel:
                 return ModelResponse(
                     parts=[ToolCallPart('get_current_system_log', {})]
                 )
-            elif call_count[0] == 2:
+            if call_count[0] == 2:
                 # Second: run a diagnostic command
                 return ModelResponse(
                     parts=[ToolCallPart('bash', {'command': 'uname -a'})]
                 )
-            else:
-                # Final response
-                return ModelResponse(
-                    parts=[TextPart('System diagnostics complete')]
-                )
+            # Final response
+            return ModelResponse(
+                parts=[TextPart('System diagnostics complete')]
+            )
 
         with legacy_agent.override(model=FunctionModel(multi_tool_workflow)):
             result = await legacy_agent.run("Diagnose system issues")
@@ -367,7 +372,7 @@ class TestFunctionModelEdgeCases:
     async def test_function_model_no_tool_calls(self, simple_agent):
         """Test FunctionModel that returns text without calling tools."""
         def direct_response(
-            messages: List[ModelMessage], info: AgentInfo
+            _messages: List[ModelMessage], _info: AgentInfo
         ) -> ModelResponse:
             return ModelResponse(
                 parts=[TextPart('I can help you with Linux commands.')]
@@ -378,12 +383,14 @@ class TestFunctionModelEdgeCases:
 
         assert result.output == 'I can help you with Linux commands.'
 
-    async def test_function_model_with_tool_info(self, simple_agent, mock_subprocess_popen):
+    async def test_function_model_with_tool_info(
+        self, simple_agent, mock_subprocess_popen
+    ):
         """Test that FunctionModel receives correct AgentInfo."""
         received_info = [None]
 
         def capture_info(
-            messages: List[ModelMessage], info: AgentInfo
+            _messages: List[ModelMessage], info: AgentInfo
         ) -> ModelResponse:
             received_info[0] = info
             return ModelResponse(parts=[TextPart('Done')])
@@ -398,20 +405,18 @@ class TestFunctionModelEdgeCases:
     async def test_function_model_sudo_blocked(self, simple_agent):
         """Test that sudo commands are blocked via FunctionModel."""
         def try_sudo(
-            messages: List[ModelMessage], info: AgentInfo
+            messages: List[ModelMessage], info: AgentInfo  # pylint: disable=unused-argument
         ) -> ModelResponse:
             if len(messages) == 1:
                 args = {'command': 'sudo apt update'}
                 return ModelResponse(parts=[ToolCallPart('bash', args)])
-            else:
-                tool_return = messages[-1].parts[0]
-                return ModelResponse(
-                    parts=[TextPart(f'Result: {tool_return.content}')]
-                )
+            tool_return = messages[-1].parts[0]
+            return ModelResponse(
+                parts=[TextPart(f'Result: {tool_return.content}')]
+            )
 
-        with capture_run_messages() as messages:
-            with simple_agent.override(model=FunctionModel(try_sudo)):
-                result = await simple_agent.run("Update system")
+        with simple_agent.override(model=FunctionModel(try_sudo)):
+            result = await simple_agent.run("Update system")
 
         # Verify sudo was rejected
         assert 'superuser' in result.output.lower() or 'abort' in result.output.lower()
@@ -458,7 +463,9 @@ class TestAgentOverride:
         inner_response = "Inner model response"
 
         with simple_agent.override(model=TestModel(custom_output_text=outer_response)):
-            with simple_agent.override(model=TestModel(custom_output_text=inner_response)):
+            with simple_agent.override(
+                model=TestModel(custom_output_text=inner_response)
+            ):
                 inner_result = await simple_agent.run("inner query")
             outer_result = await simple_agent.run("outer query")
 
@@ -474,7 +481,9 @@ class TestAgentOverride:
 class TestCaptureRunMessages:
     """Tests for capture_run_messages functionality."""
 
-    async def test_capture_basic_conversation(self, simple_agent, mock_subprocess_popen):
+    async def test_capture_basic_conversation(
+        self, simple_agent, mock_subprocess_popen
+    ):
         """Test capturing a basic conversation."""
         with capture_run_messages() as messages:
             with simple_agent.override(model=TestModel()):
@@ -515,9 +524,6 @@ class TestCaptureRunMessages:
 
     async def test_capture_multiple_runs(self, simple_agent, mock_subprocess_popen):
         """Test capturing messages from multiple runs."""
-        messages1 = []
-        messages2 = []
-
         with capture_run_messages() as msgs:
             with simple_agent.override(model=TestModel(custom_output_text="Run 1")):
                 await simple_agent.run("First query")
@@ -541,7 +547,9 @@ class TestCaptureRunMessages:
 class TestSystemPromptIntegration:
     """Tests for system prompt behavior."""
 
-    async def test_system_prompt_included(self, legacy_agent, mock_subprocess_popen, mock_subprocess_run):
+    async def test_system_prompt_included(
+        self, legacy_agent, mock_subprocess_popen, mock_subprocess_run
+    ):
         """Test that system prompt is included in messages."""
         with capture_run_messages() as messages:
             with legacy_agent.override(model=TestModel()):
@@ -563,7 +571,7 @@ class TestSystemPromptIntegration:
     async def test_custom_system_prompt(self, mock_subprocess_popen):
         """Test agent with custom system prompt."""
         custom_prompt = "You are a Python expert. Help with Python code."
-        
+
         agent = Agent(
             model="test",
             tools=[bash_tool],
@@ -597,21 +605,20 @@ class TestToolIntegration:
     async def test_bash_tool_integration(self, simple_agent, mock_subprocess_popen):
         """Test bash tool is properly integrated with agent."""
         def run_specific_bash(
-            messages: List[ModelMessage], info: AgentInfo
+            messages: List[ModelMessage], info: AgentInfo  # pylint: disable=unused-argument
         ) -> ModelResponse:
             if len(messages) == 1:
                 return ModelResponse(
                     parts=[ToolCallPart('bash', {'command': 'echo hello'})]
                 )
-            else:
-                tool_return = messages[-1].parts[0]
-                return ModelResponse(
-                    parts=[TextPart(f'Output: {tool_return.content}')]
-                )
+            tool_return = messages[-1].parts[0]
+            return ModelResponse(
+                parts=[TextPart(f'Output: {tool_return.content}')]
+            )
 
         with capture_run_messages() as messages:
             with simple_agent.override(model=FunctionModel(run_specific_bash)):
-                result = await simple_agent.run("Say hello")
+                await simple_agent.run("Say hello")
 
         # Verify the tool was called and returned
         tool_returns = []
@@ -623,24 +630,27 @@ class TestToolIntegration:
 
         assert len(tool_returns) >= 1
 
-    async def test_system_log_tool_integration(self, legacy_agent, mock_subprocess_run, mock_subprocess_popen):
+    async def test_system_log_tool_integration(
+        self, legacy_agent, mock_subprocess_run, mock_subprocess_popen
+    ):
         """Test system log tools are properly integrated."""
         def get_system_log(
-            messages: List[ModelMessage], info: AgentInfo
+            messages: List[ModelMessage], info: AgentInfo  # pylint: disable=unused-argument
         ) -> ModelResponse:
             if len(messages) == 1:
                 return ModelResponse(
                     parts=[ToolCallPart('get_current_system_log', {})]
                 )
-            else:
-                return ModelResponse(parts=[TextPart('Log retrieved')])
+            return ModelResponse(parts=[TextPart('Log retrieved')])
 
         with legacy_agent.override(model=FunctionModel(get_system_log)):
             result = await legacy_agent.run("Show system log")
 
         assert result.output == 'Log retrieved'
 
-    async def test_shell_history_tool_integration(self, legacy_agent, mock_subprocess_popen, tmp_path, monkeypatch):
+    async def test_shell_history_tool_integration(
+        self, legacy_agent, mock_subprocess_popen, tmp_path, monkeypatch
+    ):
         """Test shell history tool is properly integrated."""
         # Setup mock history file
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -649,17 +659,16 @@ class TestToolIntegration:
         history_file.write_text("ls -la\ncd /tmp\npwd\n")
 
         def get_history(
-            messages: List[ModelMessage], info: AgentInfo
+            messages: List[ModelMessage], info: AgentInfo  # pylint: disable=unused-argument
         ) -> ModelResponse:
             if len(messages) == 1:
                 return ModelResponse(
                     parts=[ToolCallPart('get_filtered_shell_history', {'n': 3})]
                 )
-            else:
-                tool_return = messages[-1].parts[0]
-                return ModelResponse(
-                    parts=[TextPart(f'History: {tool_return.content}')]
-                )
+            tool_return = messages[-1].parts[0]
+            return ModelResponse(
+                parts=[TextPart(f'History: {tool_return.content}')]
+            )
 
         with legacy_agent.override(model=FunctionModel(get_history)):
             result = await legacy_agent.run("Show my command history")
@@ -679,7 +688,9 @@ class TestMessageHistory:
         """Test that message history enables conversation continuity."""
         history = None
 
-        with simple_agent.override(model=TestModel(custom_output_text="First response")):
+        with simple_agent.override(
+            model=TestModel(custom_output_text="First response")
+        ):
             result1 = await simple_agent.run("First message")
             history = result1.all_messages()
 
@@ -687,7 +698,9 @@ class TestMessageHistory:
         assert len(history) >= 2
 
         # Second run with history
-        with simple_agent.override(model=TestModel(custom_output_text="Second response")):
+        with simple_agent.override(
+            model=TestModel(custom_output_text="Second response")
+        ):
             result2 = await simple_agent.run(
                 "Second message",
                 message_history=history
@@ -726,14 +739,18 @@ def override_simple_agent(simple_agent):
 class TestFixtureOverridePattern:
     """Tests demonstrating the pytest fixture override pattern."""
 
-    async def test_with_fixture_override(self, override_simple_agent, mock_subprocess_popen):
+    async def test_with_fixture_override(
+        self, override_simple_agent, mock_subprocess_popen
+    ):
         """Test using the fixture-based override pattern."""
         # Agent is already overridden via fixture
         result = await override_simple_agent.run("Test with fixture")
 
         assert result.output is not None
 
-    async def test_fixture_isolation(self, override_simple_agent, mock_subprocess_popen):
+    async def test_fixture_isolation(
+        self, override_simple_agent, mock_subprocess_popen
+    ):
         """Test that fixture provides proper test isolation."""
         result1 = await override_simple_agent.run("Query 1")
         result2 = await override_simple_agent.run("Query 2")
@@ -754,15 +771,14 @@ class TestErrorHandling:
     async def test_tool_exception_handling(self, simple_agent):
         """Test that tool exceptions are handled gracefully."""
         def call_with_error(
-            messages: List[ModelMessage], info: AgentInfo
+            messages: List[ModelMessage], info: AgentInfo  # pylint: disable=unused-argument
         ) -> ModelResponse:
             if len(messages) == 1:
                 # Call bash with a command that will fail
                 return ModelResponse(
                     parts=[ToolCallPart('bash', {'command': 'nonexistent_cmd_12345'})]
                 )
-            else:
-                return ModelResponse(parts=[TextPart('Handled error')])
+            return ModelResponse(parts=[TextPart('Handled error')])
 
         # Mock to simulate command not found
         with patch('legacyhelper.tools.command_tool.subprocess.Popen') as mock_popen:
@@ -779,23 +795,21 @@ class TestErrorHandling:
     async def test_blocked_command_in_agent_flow(self, simple_agent):
         """Test that blocked commands don't crash the agent."""
         def try_blocked(
-            messages: List[ModelMessage], info: AgentInfo
+            messages: List[ModelMessage], info: AgentInfo  # pylint: disable=unused-argument
         ) -> ModelResponse:
             if len(messages) == 1:
                 return ModelResponse(
                     parts=[ToolCallPart('bash', {'command': 'shutdown -h now'})]
                 )
-            else:
-                tool_return = messages[-1].parts[0]
-                # Check if it was blocked
-                if 'Blocked' in str(tool_return.content):
-                    return ModelResponse(
-                        parts=[TextPart('Command was safely blocked')]
-                    )
-                return ModelResponse(parts=[TextPart('Unexpected result')])
+            tool_return = messages[-1].parts[0]
+            # Check if it was blocked
+            if 'Blocked' in str(tool_return.content):
+                return ModelResponse(
+                    parts=[TextPart('Command was safely blocked')]
+                )
+            return ModelResponse(parts=[TextPart('Unexpected result')])
 
         with simple_agent.override(model=FunctionModel(try_blocked)):
             result = await simple_agent.run("Shutdown the system")
 
         assert result.output == 'Command was safely blocked'
-
