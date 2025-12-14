@@ -1,4 +1,5 @@
 """Main Textual application for LegacyHelper."""
+import asyncio
 from typing import Optional, List
 from textual.app import App, ComposeResult
 from textual.containers import Container, ScrollableContainer
@@ -6,8 +7,7 @@ from textual.widgets import Header, Footer, Input
 from textual.binding import Binding
 from textual.reactive import reactive
 from textual import events
-from pydantic_ai import Agent
-from legacyhelper.core.workflow import agent_graph_traversal
+from pydantic_ai import Agent, FinalResultEvent, FunctionToolCallEvent
 
 from legacyhelper.ui.widgets import (
     MessageWidget,
@@ -231,7 +231,7 @@ class LegacyHelperApp(App[None]):
 
     current_command: reactive = reactive(None)
 
-    def __init__(self, agent:Agent=None, **kwargs) -> None:
+    def __init__(self, agent: Agent = None, **kwargs) -> None:
         """Initialize the app.
 
         Args:
@@ -243,6 +243,11 @@ class LegacyHelperApp(App[None]):
         self.conversation_panel: Optional[ConversationPanel] = None
         self.status_bar: Optional[StatusBarWidget] = None
         self.current_spinner: Optional[SpinnerWidget] = None
+        self.streaming_message: Optional[StreamingMessageWidget] = None
+        # Locks for thread-safe access to shared state
+        self._spinner_lock = asyncio.Lock()
+        self._streaming_lock = asyncio.Lock()
+        self._processing = False  # Flag to prevent concurrent submissions
 
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
@@ -268,6 +273,49 @@ class LegacyHelperApp(App[None]):
         input_widget = self.query_one("#user-input", HistoryInput)
         input_widget.focus()
 
+    async def _add_spinner(self, message: str) -> None:
+        """Thread-safe method to add a spinner.
+
+        Args:
+            message: Message to display with spinner
+        """
+        async with self._spinner_lock:
+            if self.current_spinner is None and self.conversation_panel:
+                self.current_spinner = self.conversation_panel.add_spinner(message)
+
+    async def _remove_spinner(self) -> None:
+        """Thread-safe method to remove the current spinner."""
+        async with self._spinner_lock:
+            if self.current_spinner:
+                await self.current_spinner.remove()
+                self.current_spinner = None
+
+    async def _add_streaming_message(self) -> Optional[StreamingMessageWidget]:
+        """Thread-safe method to add a streaming message widget.
+
+        Returns:
+            The created StreamingMessageWidget or None
+        """
+        async with self._streaming_lock:
+            if self.conversation_panel:
+                self.streaming_message = self.conversation_panel.add_streaming_message()
+            return self.streaming_message
+
+    async def _append_to_stream(self, text: str) -> None:
+        """Thread-safe method to append text to streaming message.
+
+        Args:
+            text: Text chunk to append
+        """
+        async with self._streaming_lock:
+            if self.streaming_message:
+                self.streaming_message.append_text(text)
+
+    async def _clear_streaming_message(self) -> None:
+        """Thread-safe method to clear the streaming message reference."""
+        async with self._streaming_lock:
+            self.streaming_message = None
+
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle user input submission.
 
@@ -278,47 +326,119 @@ class LegacyHelperApp(App[None]):
         if not user_input:
             return
 
-        # Add to history and clear input
-        input_widget = self.query_one("#user-input", HistoryInput)
-        input_widget.add_to_history(user_input)
-        event.input.value = ""
+        # Prevent concurrent submissions
+        if self._processing:
+            return
+        self._processing = True
 
-        # Add user message to conversation
+        try:
+            # Add to history and clear input
+            input_widget = self.query_one("#user-input", HistoryInput)
+            input_widget.add_to_history(user_input)
+            event.input.value = ""
+
+            # Add user message to conversation
+            if self.conversation_panel:
+                self.conversation_panel.add_message("user", user_input)
+
+            # Add spinner (thread-safe)
+            await self._add_spinner("Thinking...")
+
+            # Update status
+            if self.status_bar:
+                self.status_bar.set_status("thinking")
+
+            # Get response from agent with streaming
+            if self.agent:
+                await self._process_agent_response(user_input)
+
+        except Exception as e:
+            await self._handle_error(e)
+        finally:
+            self._processing = False
+
+    async def _process_agent_response(self, user_input: str) -> None:
+        """Process the agent response with proper synchronization.
+
+        Args:
+            user_input: The user's input text
+        """
+        try:
+            # Use agent.iter() to iterate over event graph
+            async with self.agent.iter(
+                user_input, message_history=self.message_history
+            ) as result:
+                # Process each node in the agent graph
+                async for node in result:
+                    await self._process_node(node, result)
+
+            self.message_history = result.result.all_messages()
+
+            # Clear streaming message reference
+            await self._clear_streaming_message()
+
+            # Update status
+            if self.status_bar:
+                self.status_bar.set_status("ready")
+
+        except Exception as e:
+            await self._handle_error(e)
+
+    async def _process_node(self, node, result) -> None:
+        """Process a single agent graph node.
+
+        Args:
+            node: The agent graph node
+            result: The agent result context
+        """
+        # Check if this is a model request node with streaming text
+        if self.agent.is_model_request_node(node):
+            async with node.stream(result.ctx) as request_stream:
+                final_result_found = False
+                async for event in request_stream:
+                    if isinstance(event, FinalResultEvent):
+                        # Create streaming message widget (thread-safe)
+                        await self._add_streaming_message()
+                        final_result_found = True
+                        break
+
+                if final_result_found:
+                    # Stop spinner (thread-safe)
+                    await self._remove_spinner()
+                    # Stream text to display
+                    async for output in request_stream.stream_text(
+                        delta=True, debounce_by=0.01
+                    ):
+                        await self._append_to_stream(output)
+
+        elif self.agent.is_call_tools_node(node):
+            async with node.stream(result.ctx) as handle_stream:
+                async for event in handle_stream:
+                    if isinstance(event, FunctionToolCallEvent):
+                        # Get tool info
+                        args = event.part.args_as_dict()
+                        command = args.get("command")
+                        tool_name = args.get("tool_name", "[GENERIC TOOL]")
+                        entity = command if command is not None else tool_name
+                        # Add spinner for tool execution (thread-safe)
+                        await self._add_spinner(f"Running... {entity}")
+
+    async def _handle_error(self, error: Exception) -> None:
+        """Handle errors during processing.
+
+        Args:
+            error: The exception that occurred
+        """
+        # Remove spinner on error (thread-safe)
+        await self._remove_spinner()
+        # Clear streaming message reference
+        await self._clear_streaming_message()
+
         if self.conversation_panel:
-            self.conversation_panel.add_message("user", user_input)
-            # Add spinner instead of static message
-            self.current_spinner = self.conversation_panel.add_spinner("Thinking...")
+            self.conversation_panel.add_message("error", str(error))
 
-        # Update status
         if self.status_bar:
-            self.status_bar.set_status("thinking")
-
-        # Get response from agent with streaming
-        if self.agent:
-            try:
-                streaming_message: Optional[StreamingMessageWidget] = None
-                # making graph traversal, and the workflow is displayed
-                # accordingly.
-                await agent_graph_traversal(self, user_input, streaming_message)
-                # Update status
-                if self.status_bar:
-                    self.status_bar.set_status("ready")
-
-            except Exception as e: #
-                import traceback
-                # Remove spinner on error
-                if self.current_spinner:
-                    await self.current_spinner.remove()
-                    self.current_spinner = None
-
-                if self.conversation_panel:
-                    self.conversation_panel.add_message(
-                        "error",
-                        rf"{str(e)}"
-                    )
-
-                if self.status_bar:
-                    self.status_bar.set_status("error")
+            self.status_bar.set_status("error")
 
     async def on_button_pressed(self, event) -> None:
         """Handle button presses.

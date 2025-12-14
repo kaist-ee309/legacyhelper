@@ -274,6 +274,7 @@ class StreamingMessageWidget(Container):
         self.text_content: Optional[Static] = None
         self.accumulated_text: str = ""
         self.parent_container = parent_container
+        self._update_pending = False
 
     def compose(self) -> ComposeResult:
         """Compose the streaming message widget."""
@@ -285,10 +286,20 @@ class StreamingMessageWidget(Container):
     def append_text(self, chunk: str) -> None:
         """Append text chunk to the message.
 
+        Thread-safe: Uses call_later to ensure UI updates happen on main thread.
+
         Args:
             chunk: Text chunk to append
         """
         self.accumulated_text += chunk
+        # Schedule UI update on main thread to avoid race conditions
+        if not self._update_pending:
+            self._update_pending = True
+            self.call_later(self._do_update)
+
+    def _do_update(self) -> None:
+        """Perform the actual UI update on the main thread."""
+        self._update_pending = False
         if self.text_content:
             self.text_content.update(Markdown(self.accumulated_text))
 
